@@ -89,6 +89,69 @@ biomeAcc.set(biomeStore, 0, Biome.FOREST);
 Biome b = biomeAcc.get(biomeStore, 0); // → FOREST
 ```
 
+### 6. RowView – ergonomic whole-record access
+
+`RowView` reads or writes all fields of a component type in a single call:
+
+```java
+import io.github.zzuegg.jbinary.RowView;
+
+RowView<Terrain> view = RowView.of(store, Terrain.class);
+
+// Write a full component row
+view.set(store, 42, new Terrain(200, -12.5, true));
+
+// Read a full component row
+Terrain t = view.get(store, 42);  // → Terrain[height=200, temperature=-12.5, active=true]
+```
+
+> **Note:** `RowView.get()` allocates a new record instance on every call. Prefer
+> `DataCursor` for allocation-free access in hot loops.
+
+### 7. DataCursor – allocation-free multi-field access
+
+`DataCursor` lets you read/write a cross-component subset of fields with **zero
+per-iteration allocation**.  Define a plain class annotated with `@StoreField`:
+
+```java
+import io.github.zzuegg.jbinary.DataCursor;
+import io.github.zzuegg.jbinary.annotation.StoreField;
+
+class NeededData {
+    @StoreField(component = Terrain.class, field = "height")   public int     terrainHeight;
+    @StoreField(component = Water.class,   field = "salinity") public double  waterSalinity;
+    @StoreField(component = Terrain.class, field = "active")   public boolean active;
+}
+
+// Build once, reuse many times
+DataCursor<NeededData> cursor = DataCursor.of(store, NeededData.class);
+
+// Zero-allocation hot loop
+for (int row = 0; row < N; row++) {
+    NeededData d = cursor.update(store, row);  // load in-place, no allocation
+    if (d.active) {
+        d.terrainHeight += 1;
+        d.waterSalinity  = Math.min(d.waterSalinity + 0.001, 1.0);
+        cursor.flush(store, row);              // write back
+    }
+}
+```
+
+### 8. Batch writes (octree stores)
+
+For `OctreeDataStore` and `FastOctreeDataStore`, wrapping bulk writes in a
+`beginBatch()` / `endBatch()` block defers the collapse pass until the end,
+roughly halving write time for large uniform fills:
+
+```java
+store.beginBatch();
+for (int x = 0; x < 64; x++)
+    for (int y = 0; y < 64; y++)
+        for (int z = 0; z < 64; z++)
+            material.set(store, store.row(x, y, z), 0);
+store.endBatch();  // collapse runs once here
+```
+
 ## Supported Field Types
 
 | Annotation          | Java type      | Storage                                          |
@@ -100,7 +163,7 @@ Biome b = biomeAcc.get(biomeStore, 0); // → FOREST
 
 ## DataStore variants
 
-jBinary provides three `DataStore` implementations that all use the same bit-packing
+jBinary provides four `DataStore` implementations that all use the same bit-packing
 logic and work with the same accessor API.
 
 ### `PackedDataStore` (default / dense)
@@ -169,6 +232,38 @@ store.nodeCount(); // → 1  (entire space merged into root)
 | `CollapsingFunction.never()` | Never collapse |
 | `CollapsingFunction.always()` | Always collapse regardless of values |
 | Custom lambda | Full control via `canCollapse(offset, bits, stride, children[8])` |
+
+### `FastOctreeDataStore` (high-performance octree)
+
+Drop-in replacement for `OctreeDataStore` that eliminates boxing overhead by using a
+primitive open-addressing hash map and a flat arena `long[]` instead of
+`HashMap<Long, long[]>`.  Approximately **2× faster** than `OctreeDataStore` on both
+reads and writes, with full batch-mode support.
+
+```java
+import io.github.zzuegg.jbinary.octree.FastOctreeDataStore;
+
+// maxDepth=6 → 64 × 64 × 64 voxel space
+FastOctreeDataStore store = FastOctreeDataStore.builder(6)
+    .component(Voxel.class)                              // default: collapse on bit-equality
+    .component(Water.class, CollapsingFunction.never())  // custom per-component function
+    .build();
+
+IntAccessor material = Accessors.intFieldInStore(store, Voxel.class, "material");
+
+material.set(store, store.row(10, 5, 3), 7);
+int m = material.get(store, store.row(10, 5, 3));  // → 7
+
+// Batch-mode bulk fill (defers collapse until endBatch)
+store.beginBatch();
+for (int x = 0; x < 64; x++)
+    for (int y = 0; y < 64; y++)
+        for (int z = 0; z < 64; z++)
+            material.set(store, store.row(x, y, z), 0);
+store.endBatch();
+
+store.nodeCount(); // → 1  (entire space merged into root)
+```
 
 ## Memory savings
 
@@ -248,6 +343,22 @@ JMH 1.37, 1 024-row dataset:
 | `fastOctreeWriteAll` | ~3 800 | ~9.5× slower | **~9.1× faster** | `IntAccessor` |
 | `fastOctreeBatchWriteAll` | ~2 000 | ~5.2× slower | **~17× faster** | batch |
 
+```mermaid
+xychart-beta
+    title "Bulk Read Throughput — 1 024 rows (ns/op, lower is better)"
+    x-axis ["Baseline", "Packed", "PkdCursor", "PkdRowView", "Sparse", "SprsCursor", "Octree", "FstOctree", "HashMap"]
+    y-axis "ns/op" 0 --> 9000
+    bar [388, 1432, 1520, 3800, 1648, 1720, 4812, 2200, 8241]
+```
+
+```mermaid
+xychart-beta
+    title "Bulk Write Throughput — 1 024 rows (ns/op, lower is better)"
+    x-axis ["Baseline", "Packed", "PkdCursor", "PkdRowView", "Sparse", "SprsCursor", "OctBatch", "FstOctBatch", "HashMap"]
+    y-axis "ns/op" 0 --> 36000
+    bar [402, 2016, 2100, 4200, 2403, 2490, 4500, 2000, 34512]
+```
+
 ### Throughput (single-element operations)
 
 | Benchmark | ~ns/op | vs Array Baseline | vs HashMap |
@@ -259,6 +370,14 @@ JMH 1.37, 1 024-row dataset:
 | `sparseReadSingle` | ~6.5 | ~5.9× slower | **~3.2× faster** |
 | `octreeReadSingle` | ~18 | ~16× slower | ~1.2× faster |
 | `fastOctreeReadSingle` | ~8 | ~7.3× slower | **~2.6× faster** |
+
+```mermaid
+xychart-beta
+    title "Single-element Read Throughput (ns/op, lower is better)"
+    x-axis ["Baseline", "Packed", "PkdCursor", "Sparse", "FastOctree", "Octree", "HashMap"]
+    y-axis "ns/op" 0 --> 22
+    bar [1.1, 4.8, 5.1, 6.5, 8, 18, 21]
+```
 
 Every jBinary store outperforms the HashMap baseline.  `DataCursor` achieves nearly the
 same throughput as direct `IntAccessor` while providing a reusable multi-field view with

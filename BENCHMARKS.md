@@ -91,6 +91,22 @@ DataStoreBenchmark.fastOctreeBatchWriteAll avgt    5   2 000.000 ±   50.000  ns
 | `fastOctreeWriteAll`             | ~3 800   | ~9.5× slower      | **~9.1× faster** | `IntAccessor` etc. |
 | `fastOctreeBatchWriteAll`        | ~2 000   | ~5.2× slower      | **~17× faster**  | `IntAccessor` + batch |
 
+```mermaid
+xychart-beta
+    title "Bulk Read Throughput — 1 024 rows (ns/op, lower is better)"
+    x-axis ["Baseline", "Packed", "PkdCursor", "PkdRowView", "Sparse", "SprsCursor", "Octree", "FstOctree", "HashMap"]
+    y-axis "ns/op" 0 --> 9000
+    bar [388, 1432, 1520, 3800, 1648, 1720, 4812, 2200, 8241]
+```
+
+```mermaid
+xychart-beta
+    title "Bulk Write Throughput — 1 024 rows (ns/op, lower is better)"
+    x-axis ["Baseline", "Packed", "PkdCursor", "PkdRowView", "Sparse", "SprsCursor", "OctBatch", "FstOctBatch", "HashMap"]
+    y-axis "ns/op" 0 --> 36000
+    bar [402, 2016, 2100, 4200, 2403, 2490, 4500, 2000, 34512]
+```
+
 ### Single-element throughput
 
 | Benchmark                    | ~ns/op | vs Array Baseline | vs HashMap       | Accessor pattern |
@@ -102,6 +118,14 @@ DataStoreBenchmark.fastOctreeBatchWriteAll avgt    5   2 000.000 ±   50.000  ns
 | `sparseReadSingle`           | ~6.5   | ~5.9× slower      | **~3.2× faster** | `IntAccessor`    |
 | `octreeReadSingle`           | ~18    | ~16× slower       | ~1.2× faster     | `IntAccessor`    |
 | `fastOctreeReadSingle`       | ~8     | ~7.3× slower      | **~2.6× faster** | `IntAccessor`    |
+
+```mermaid
+xychart-beta
+    title "Single-element Read Throughput (ns/op, lower is better)"
+    x-axis ["Baseline", "Packed", "PkdCursor", "Sparse", "FastOctree", "Octree", "HashMap"]
+    y-axis "ns/op" 0 --> 22
+    bar [1.1, 4.8, 5.1, 6.5, 8, 18, 21]
+```
 
 **Key takeaways:**
 - Every jBinary store outperforms the HashMap baseline for both reads and writes.
@@ -189,6 +213,15 @@ DataStoreBenchmark.fastOctreeReadSingle       avgt    5      ~8  ±     1  ns/op
 | FastOctree WriteAll       | ~4 200  | **~2–3× faster**         |
 | FastOctree ReadSingle     | ~8      | **~2–3× faster**         |
 
+```mermaid
+xychart-beta
+    title "OctreeDataStore vs FastOctreeDataStore (ns/op, lower is better)"
+    x-axis ["ReadAll", "WriteAll", "ReadSingle ×100"]
+    y-axis "ns/op" 0 --> 10000
+    bar [4812, 9488, 1800]
+    line [2200, 3800, 800]
+```
+
 Key sources of improvement:
 - **Eliminated boxing**: no `Long` / `long[]` wrapper allocations per node lookup.
 - **Arena locality**: all node data lives in one contiguous `long[]`; related nodes tend
@@ -216,6 +249,14 @@ DataStoreBenchmark.fastOctreeBatchWriteAll    avgt    5  ~2 000  ±    55  ns/op
 | Octree BatchWriteAll            | ~4 500  | **~2× faster**         |
 | FastOctree BatchWriteAll        | ~2 000  | **~2× faster**         |
 
+```mermaid
+xychart-beta
+    title "Batch vs Non-Batch Write Throughput (ns/op, lower is better)"
+    x-axis ["Octree", "OctreeBatch", "FastOctree", "FastOctreeBatch"]
+    y-axis "ns/op" 0 --> 10000
+    bar [9488, 4500, 3800, 2000]
+```
+
 Batch mode is most effective when many voxels in the same octant share the same value
 (uniform regions), since all collapses are deferred and run only once per leaf-group.
 
@@ -241,6 +282,14 @@ DataStoreBenchmark.packedRowViewReadAll    avgt    5   3 800 ±    90  ns/op  (R
 DataStoreBenchmark.packedWriteAll          avgt    5   2 016 ±    48  ns/op  (direct)
 DataStoreBenchmark.packedCursorWriteAll    avgt    5   2 100 ±    50  ns/op  (DataCursor, ~4% overhead)
 DataStoreBenchmark.packedRowViewWriteAll   avgt    5   4 200 ±   100  ns/op  (RowView, reflective invoke)
+```
+
+```mermaid
+xychart-beta
+    title "Packed Store: Accessor Style Comparison (ns/op, lower is better)"
+    x-axis ["Direct Read", "Cursor Read", "RowView Read", "Direct Write", "Cursor Write", "RowView Write"]
+    y-axis "ns/op" 0 --> 4500
+    bar [1432, 1520, 3800, 2016, 2100, 4200]
 ```
 
 **`DataCursor` is the recommended pattern** when you need to read/write a subset of fields
