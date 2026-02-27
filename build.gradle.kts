@@ -41,8 +41,13 @@ dependencies {
     "jmhAnnotationProcessor"("org.openjdk.jmh:jmh-generator-annprocess:$jmhVersion")
 }
 
+tasks.withType<JavaCompile>().configureEach {
+    options.compilerArgs.add("--enable-preview")
+}
+
 tasks.test {
     useJUnitPlatform()
+    jvmArgs("--enable-preview")
 }
 
 tasks.register<JavaExec>("jmhRun") {
