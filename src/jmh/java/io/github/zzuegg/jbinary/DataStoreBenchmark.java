@@ -6,6 +6,7 @@ import io.github.zzuegg.jbinary.accessor.IntAccessor;
 import io.github.zzuegg.jbinary.annotation.BitField;
 import io.github.zzuegg.jbinary.annotation.BoolField;
 import io.github.zzuegg.jbinary.annotation.DecimalField;
+import io.github.zzuegg.jbinary.octree.OctreeDataStore;
 import org.openjdk.jmh.annotations.*;
 import org.openjdk.jmh.infra.Blackhole;
 
@@ -27,10 +28,24 @@ public class DataStoreBenchmark {
     ) {}
 
     // ------------------------------------------------------------------ packed store
-    DataStore store;
-    IntAccessor    heightAcc;
-    DoubleAccessor tempAcc;
-    BoolAccessor   activeAcc;
+    DataStore packedStore;
+    IntAccessor    packedHeightAcc;
+    DoubleAccessor packedTempAcc;
+    BoolAccessor   packedActiveAcc;
+
+    // ------------------------------------------------------------------ sparse store
+    DataStore sparseStore;
+    IntAccessor    sparseHeightAcc;
+    DoubleAccessor sparseTempAcc;
+    BoolAccessor   sparseActiveAcc;
+
+    // ------------------------------------------------------------------ octree store
+    // maxDepth=4 → 16×16×16 = 4 096 voxels; we use N=1024 of them
+    OctreeDataStore octreeStore;
+    IntAccessor    octreeHeightAcc;
+    DoubleAccessor octreeTempAcc;
+    BoolAccessor   octreeActiveAcc;
+    int[]          octreeRows;   // pre-computed Morton-code row indices
 
     // ------------------------------------------------------------------ baseline store (parallel arrays)
     int[]     baselineHeight;
@@ -41,36 +56,139 @@ public class DataStoreBenchmark {
 
     @Setup
     public void setup() {
-        store = DataStore.of(N, Terrain.class);
-        heightAcc = Accessors.intFieldInStore(store, Terrain.class, "height");
-        tempAcc   = Accessors.doubleFieldInStore(store, Terrain.class, "temperature");
-        activeAcc = Accessors.boolFieldInStore(store, Terrain.class, "active");
+        // packed store
+        packedStore = DataStore.of(N, Terrain.class);
+        packedHeightAcc = Accessors.intFieldInStore(packedStore, Terrain.class, "height");
+        packedTempAcc   = Accessors.doubleFieldInStore(packedStore, Terrain.class, "temperature");
+        packedActiveAcc = Accessors.boolFieldInStore(packedStore, Terrain.class, "active");
 
+        // sparse store
+        sparseStore = DataStore.sparse(N, Terrain.class);
+        sparseHeightAcc = Accessors.intFieldInStore(sparseStore, Terrain.class, "height");
+        sparseTempAcc   = Accessors.doubleFieldInStore(sparseStore, Terrain.class, "temperature");
+        sparseActiveAcc = Accessors.boolFieldInStore(sparseStore, Terrain.class, "active");
+
+        // octree store (maxDepth=4 → 16×16×16 space; first N Morton-coded rows)
+        octreeStore = OctreeDataStore.builder(4)
+                .component(Terrain.class)
+                .build();
+        octreeHeightAcc = Accessors.intFieldInStore(octreeStore, Terrain.class, "height");
+        octreeTempAcc   = Accessors.doubleFieldInStore(octreeStore, Terrain.class, "temperature");
+        octreeActiveAcc = Accessors.boolFieldInStore(octreeStore, Terrain.class, "active");
+
+        // pre-compute N octree row indices using x,y,z in the 16×16×16 space
+        octreeRows = new int[N];
+        for (int i = 0; i < N; i++) {
+            int x = i & 0xF;        // 0..15
+            int y = (i >> 4) & 0xF; // 0..15
+            int z = (i >> 8) & 0x3; // 0..3 (N=1024 → z in 0..3)
+            octreeRows[i] = octreeStore.row(x, y, z);
+        }
+
+        // baseline (parallel primitive arrays)
         baselineHeight = new int[N];
         baselineTemp   = new double[N];
         baselineActive = new boolean[N];
 
         for (int i = 0; i < N; i++) {
-            heightAcc.set(store, i, i % 256);
-            tempAcc.set(store, i, (i % 100) - 50.0);
-            activeAcc.set(store, i, (i & 1) == 0);
+            int h    = i % 256;
+            double t = (i % 100) - 50.0;
+            boolean a = (i & 1) == 0;
 
-            baselineHeight[i] = i % 256;
-            baselineTemp[i]   = (i % 100) - 50.0;
-            baselineActive[i] = (i & 1) == 0;
+            packedHeightAcc.set(packedStore, i, h);
+            packedTempAcc.set(packedStore, i, t);
+            packedActiveAcc.set(packedStore, i, a);
+
+            sparseHeightAcc.set(sparseStore, i, h);
+            sparseTempAcc.set(sparseStore, i, t);
+            sparseActiveAcc.set(sparseStore, i, a);
+
+            octreeHeightAcc.set(octreeStore, octreeRows[i], h);
+            octreeTempAcc.set(octreeStore, octreeRows[i], t);
+            octreeActiveAcc.set(octreeStore, octreeRows[i], a);
+
+            baselineHeight[i] = h;
+            baselineTemp[i]   = t;
+            baselineActive[i] = a;
         }
     }
 
-    // ------------------------------------------------------------------ benchmarks
+    // ------------------------------------------------------------------ packed benchmarks
 
     @Benchmark
     public void packedReadAll(Blackhole bh) {
         for (int i = 0; i < N; i++) {
-            bh.consume(heightAcc.get(store, i));
-            bh.consume(tempAcc.get(store, i));
-            bh.consume(activeAcc.get(store, i));
+            bh.consume(packedHeightAcc.get(packedStore, i));
+            bh.consume(packedTempAcc.get(packedStore, i));
+            bh.consume(packedActiveAcc.get(packedStore, i));
         }
     }
+
+    @Benchmark
+    public void packedWriteAll() {
+        for (int i = 0; i < N; i++) {
+            packedHeightAcc.set(packedStore, i, i % 256);
+            packedTempAcc.set(packedStore, i, (i % 100) - 50.0);
+            packedActiveAcc.set(packedStore, i, (i & 1) == 0);
+        }
+    }
+
+    @Benchmark
+    public int packedReadSingle() {
+        return packedHeightAcc.get(packedStore, N / 2);
+    }
+
+    // ------------------------------------------------------------------ sparse benchmarks
+
+    @Benchmark
+    public void sparseReadAll(Blackhole bh) {
+        for (int i = 0; i < N; i++) {
+            bh.consume(sparseHeightAcc.get(sparseStore, i));
+            bh.consume(sparseTempAcc.get(sparseStore, i));
+            bh.consume(sparseActiveAcc.get(sparseStore, i));
+        }
+    }
+
+    @Benchmark
+    public void sparseWriteAll() {
+        for (int i = 0; i < N; i++) {
+            sparseHeightAcc.set(sparseStore, i, i % 256);
+            sparseTempAcc.set(sparseStore, i, (i % 100) - 50.0);
+            sparseActiveAcc.set(sparseStore, i, (i & 1) == 0);
+        }
+    }
+
+    @Benchmark
+    public int sparseReadSingle() {
+        return sparseHeightAcc.get(sparseStore, N / 2);
+    }
+
+    // ------------------------------------------------------------------ octree benchmarks
+
+    @Benchmark
+    public void octreeReadAll(Blackhole bh) {
+        for (int i = 0; i < N; i++) {
+            bh.consume(octreeHeightAcc.get(octreeStore, octreeRows[i]));
+            bh.consume(octreeTempAcc.get(octreeStore, octreeRows[i]));
+            bh.consume(octreeActiveAcc.get(octreeStore, octreeRows[i]));
+        }
+    }
+
+    @Benchmark
+    public void octreeWriteAll() {
+        for (int i = 0; i < N; i++) {
+            octreeHeightAcc.set(octreeStore, octreeRows[i], i % 256);
+            octreeTempAcc.set(octreeStore, octreeRows[i], (i % 100) - 50.0);
+            octreeActiveAcc.set(octreeStore, octreeRows[i], (i & 1) == 0);
+        }
+    }
+
+    @Benchmark
+    public int octreeReadSingle() {
+        return octreeHeightAcc.get(octreeStore, octreeRows[N / 2]);
+    }
+
+    // ------------------------------------------------------------------ baseline benchmarks
 
     @Benchmark
     public void baselineReadAll(Blackhole bh) {
@@ -82,26 +200,12 @@ public class DataStoreBenchmark {
     }
 
     @Benchmark
-    public void packedWriteAll() {
-        for (int i = 0; i < N; i++) {
-            heightAcc.set(store, i, i % 256);
-            tempAcc.set(store, i, (i % 100) - 50.0);
-            activeAcc.set(store, i, (i & 1) == 0);
-        }
-    }
-
-    @Benchmark
     public void baselineWriteAll() {
         for (int i = 0; i < N; i++) {
             baselineHeight[i] = i % 256;
             baselineTemp[i]   = (i % 100) - 50.0;
             baselineActive[i] = (i & 1) == 0;
         }
-    }
-
-    @Benchmark
-    public int packedReadSingle() {
-        return heightAcc.get(store, N / 2);
     }
 
     @Benchmark
