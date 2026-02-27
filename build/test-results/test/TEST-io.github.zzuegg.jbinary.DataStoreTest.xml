@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="io.github.zzuegg.jbinary.DataStoreTest" tests="10" skipped="0" failures="0" errors="0" timestamp="2026-02-27T09:41:06.495Z" hostname="runnervmnay03" time="0.103">
+  <properties/>
+  <testcase name="decimalFieldRoundTrip()" classname="io.github.zzuegg.jbinary.DataStoreTest" time="0.048"/>
+  <testcase name="multipleComponentTypesInOneStore()" classname="io.github.zzuegg.jbinary.DataStoreTest" time="0.004"/>
+  <testcase name="intFieldRoundTrip()" classname="io.github.zzuegg.jbinary.DataStoreTest" time="0.003"/>
+  <testcase name="intFieldBoundary()" classname="io.github.zzuegg.jbinary.DataStoreTest" time="0.001"/>
+  <testcase name="rowIsolation()" classname="io.github.zzuegg.jbinary.DataStoreTest" time="0.003"/>
+  <testcase name="layoutBuilderBitsRequired()" classname="io.github.zzuegg.jbinary.DataStoreTest" time="0.001"/>
+  <testcase name="enumFieldOrdinal()" classname="io.github.zzuegg.jbinary.DataStoreTest" time="0.004"/>
+  <testcase name="bitsSpanWordBoundary()" classname="io.github.zzuegg.jbinary.DataStoreTest" time="0.003"/>
+  <testcase name="boolFieldRoundTrip()" classname="io.github.zzuegg.jbinary.DataStoreTest" time="0.001"/>
+  <testcase name="enumFieldExplicitCodes()" classname="io.github.zzuegg.jbinary.DataStoreTest" time="0.003"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

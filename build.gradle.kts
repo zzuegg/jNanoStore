@@ -1,0 +1,60 @@
+plugins {
+    `java-library`
+    `maven-publish`
+}
+
+group = "io.github.zzuegg"
+version = "0.1.0"
+
+java {
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(25)
+    }
+}
+
+val jmhVersion = "1.37"
+
+sourceSets {
+    create("jmh") {
+        java.srcDir("src/jmh/java")
+        compileClasspath += sourceSets["main"].output + configurations["jmhCompileClasspath"]
+        runtimeClasspath += output + compileClasspath
+    }
+}
+
+configurations {
+    val jmhImplementation by getting {
+        extendsFrom(configurations["implementation"])
+    }
+    val jmhAnnotationProcessor by getting
+}
+
+repositories {
+    mavenCentral()
+}
+
+dependencies {
+    testImplementation("org.junit.jupiter:junit-jupiter:5.11.4")
+    testRuntimeOnly("org.junit.platform:junit-platform-launcher")
+
+    "jmhImplementation"("org.openjdk.jmh:jmh-core:$jmhVersion")
+    "jmhAnnotationProcessor"("org.openjdk.jmh:jmh-generator-annprocess:$jmhVersion")
+}
+
+tasks.test {
+    useJUnitPlatform()
+}
+
+tasks.register<JavaExec>("jmhRun") {
+    classpath = sourceSets["jmh"].runtimeClasspath
+    mainClass.set("org.openjdk.jmh.Main")
+    args("-wi", "3", "-i", "5", "-f", "1", "-bm", "avgt", "-tu", "ns")
+}
+
+publishing {
+    publications {
+        create<MavenPublication>("mavenJava") {
+            from(components["java"])
+        }
+    }
+}
