@@ -10,6 +10,8 @@ import io.github.zzuegg.jbinary.octree.OctreeDataStore;
 import org.openjdk.jmh.annotations.*;
 import org.openjdk.jmh.infra.Blackhole;
 
+import java.util.HashMap;
+import java.util.Map;
 import java.util.concurrent.TimeUnit;
 
 @BenchmarkMode(Mode.AverageTime)
@@ -52,6 +54,9 @@ public class DataStoreBenchmark {
     double[]  baselineTemp;
     boolean[] baselineActive;
 
+    // ------------------------------------------------------------------ HashMap store (row index → Object[]{height, temp, active}, boxed values)
+    Map<Integer, Object[]> hashmapStore;
+
     static final int N = 1024;
 
     @Setup
@@ -90,6 +95,9 @@ public class DataStoreBenchmark {
         baselineTemp   = new double[N];
         baselineActive = new boolean[N];
 
+        // HashMap store (boxed Object[] per row, no packing)
+        hashmapStore = new HashMap<>((int)(N / 0.75) + 1);
+
         for (int i = 0; i < N; i++) {
             int h    = i % 256;
             double t = (i % 100) - 50.0;
@@ -110,6 +118,8 @@ public class DataStoreBenchmark {
             baselineHeight[i] = h;
             baselineTemp[i]   = t;
             baselineActive[i] = a;
+
+            hashmapStore.put(i, new Object[]{h, t, a});
         }
     }
 
@@ -211,5 +221,29 @@ public class DataStoreBenchmark {
     @Benchmark
     public int baselineReadSingle() {
         return baselineHeight[N / 2];
+    }
+
+    // ------------------------------------------------------------------ hashmap benchmarks
+
+    @Benchmark
+    public void hashmapReadAll(Blackhole bh) {
+        for (int i = 0; i < N; i++) {
+            Object[] row = hashmapStore.get(i);
+            bh.consume((int) row[0]);
+            bh.consume((double) row[1]);
+            bh.consume((boolean) row[2]);
+        }
+    }
+
+    @Benchmark
+    public void hashmapWriteAll() {
+        for (int i = 0; i < N; i++) {
+            hashmapStore.put(i, new Object[]{i % 256, (i % 100) - 50.0, (i & 1) == 0});
+        }
+    }
+
+    @Benchmark
+    public int hashmapReadSingle() {
+        return (int) hashmapStore.get(N / 2)[0];
     }
 }

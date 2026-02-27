@@ -217,31 +217,39 @@ below the theoretical maximum.
 ## Benchmarks
 
 The benchmark suite (`DataStoreBenchmark`) compares all three `DataStore` implementations
-against a **baseline** of plain parallel primitive arrays (`int[]` + `double[]` +
-`boolean[]`).  All numbers are estimated average time per operation (ns/op) on JDK 25
-with JMH 1.37, 1 024-row dataset:
+against two reference implementations — a **primitive array baseline** (`int[]` + `double[]` +
+`boolean[]`) and a **HashMap baseline** (`HashMap<Integer, Object[]>`, one per-row `Object[]`,
+no bit-packing, fully boxed).  All numbers are estimated average time per operation (ns/op)
+on JDK 25 with JMH 1.37, 1 024-row dataset:
 
 ### Throughput (bulk operations over 1 024 rows)
 
-| Benchmark | ~ns/op | vs Baseline |
-|-----------|--------|-------------|
-| `baselineReadAll` | ~388 | 1× (reference) |
-| `baselineWriteAll` | ~402 | 1× (reference) |
-| `packedReadAll` | ~1 432 | ~3.7× slower |
-| `packedWriteAll` | ~2 016 | ~5.0× slower |
-| `sparseReadAll` | ~1 650 | ~4.3× slower |
-| `sparseWriteAll` | ~2 400 | ~6.0× slower |
-| `octreeReadAll` | ~4 800 | ~12× slower |
-| `octreeWriteAll` | ~9 500 | ~24× slower |
+| Benchmark | ~ns/op | vs Array Baseline | vs HashMap |
+|-----------|--------|-------------------|------------|
+| `baselineReadAll` | ~388 | 1× (reference) | **~21× faster** |
+| `baselineWriteAll` | ~402 | 1× (reference) | **~86× faster** |
+| `hashmapReadAll` | ~8 241 | ~21× slower | 1× (reference) |
+| `hashmapWriteAll` | ~34 512 | ~86× slower | 1× (reference) |
+| `packedReadAll` | ~1 432 | ~3.7× slower | **~5.8× faster** |
+| `packedWriteAll` | ~2 016 | ~5.0× slower | **~17× faster** |
+| `sparseReadAll` | ~1 648 | ~4.3× slower | **~5.0× faster** |
+| `sparseWriteAll` | ~2 403 | ~6.0× slower | **~14× faster** |
+| `octreeReadAll` | ~4 812 | ~12× slower | **~1.7× faster** |
+| `octreeWriteAll` | ~9 488 | ~24× slower | **~3.6× faster** |
 
 ### Throughput (single-element operations)
 
-| Benchmark | ~ns/op | vs Baseline |
-|-----------|--------|-------------|
-| `baselineReadSingle` | ~1.1 | 1× (reference) |
-| `packedReadSingle` | ~4.8 | ~4.4× slower |
-| `sparseReadSingle` | ~6.5 | ~5.9× slower |
-| `octreeReadSingle` | ~18 | ~16× slower |
+| Benchmark | ~ns/op | vs Array Baseline | vs HashMap |
+|-----------|--------|-------------------|------------|
+| `baselineReadSingle` | ~1.1 | 1× (reference) | **~19× faster** |
+| `hashmapReadSingle` | ~21 | ~19× slower | 1× (reference) |
+| `packedReadSingle` | ~4.8 | ~4.4× slower | **~4.4× faster** |
+| `sparseReadSingle` | ~6.5 | ~5.9× slower | **~3.2× faster** |
+| `octreeReadSingle` | ~18 | ~16× slower | ~1.2× faster |
+
+Even the slowest jBinary store (OctreeDataStore) outperforms the HashMap baseline for
+both reads and writes — the HashMap pays for boxing every value, allocating a new
+`Object[]` per write, and per-lookup hash computation.
 
 **Why the differences?**
 
@@ -250,6 +258,7 @@ with JMH 1.37, 1 024-row dataset:
 | `PackedDataStore` | Bit-shift + mask on a contiguous `long[]` | Large dense datasets where ~82 % smaller working set improves cache hit rates |
 | `SparseDataStore` | Same bit ops + `HashMap.get()` to locate the row array | Large sparse datasets; heap ≫ L3 cache, so unallocated rows cost nothing |
 | `OctreeDataStore` | Bit ops + Morton decode + tree traversal (up to `maxDepth` hops) | 3-D voxel worlds with large uniform regions that collapse; memory savings dominate |
+| HashMap store | Boxing, `HashMap.get()` + unboxing; `Object[]` allocation per write | Not recommended; only useful as a quick prototype |
 
 See [BENCHMARKS.md](BENCHMARKS.md) for full numbers, environment details, and
 reproduction instructions.

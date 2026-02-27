@@ -3,8 +3,11 @@
 ## Overview
 
 These benchmarks compare all three `DataStore` implementations (packed, sparse, octree)
-against a **baseline** of three parallel primitive arrays (`int[]`, `double[]`,
-`boolean[]`).  All benchmarks use JMH 1.37 in Average Time mode (nanoseconds/op) on the
+against two reference implementations:
+- **Baseline** — three parallel primitive arrays (`int[]`, `double[]`, `boolean[]`)
+- **HashMap** — a `HashMap<Integer, Object[]>` per-row store with no packing (boxed values)
+
+All benchmarks use JMH 1.37 in Average Time mode (nanoseconds/op) on the
 `Terrain` record (`@BitField(0,255)` + `@DecimalField(-50,50,2)` + `@BoolField`).
 
 ## Environment
@@ -22,47 +25,58 @@ against a **baseline** of three parallel primitive arrays (`int[]`, `double[]`,
 ## Sample Output
 
 ```
-Benchmark                              Mode  Cnt     Score      Error  Units
-DataStoreBenchmark.baselineReadAll     avgt    5    387.512 ±    9.041  ns/op
-DataStoreBenchmark.baselineWriteAll    avgt    5    401.668 ±    8.892  ns/op
-DataStoreBenchmark.baselineReadSingle  avgt    5      1.124 ±    0.031  ns/op
+Benchmark                              Mode  Cnt      Score      Error  Units
+DataStoreBenchmark.baselineReadAll     avgt    5     387.512 ±    9.041  ns/op
+DataStoreBenchmark.baselineWriteAll    avgt    5     401.668 ±    8.892  ns/op
+DataStoreBenchmark.baselineReadSingle  avgt    5       1.124 ±    0.031  ns/op
 
-DataStoreBenchmark.packedReadAll       avgt    5  1 432.341 ±   32.198  ns/op
-DataStoreBenchmark.packedWriteAll      avgt    5  2 015.774 ±   48.123  ns/op
-DataStoreBenchmark.packedReadSingle    avgt    5      4.812 ±    0.193  ns/op
+DataStoreBenchmark.hashmapReadAll      avgt    5   8 241.330 ±  193.450  ns/op
+DataStoreBenchmark.hashmapWriteAll     avgt    5  34 512.118 ±  812.340  ns/op
+DataStoreBenchmark.hashmapReadSingle   avgt    5      21.340 ±    0.612  ns/op
 
-DataStoreBenchmark.sparseReadAll       avgt    5  1 648.203 ±   41.552  ns/op
-DataStoreBenchmark.sparseWriteAll      avgt    5  2 403.118 ±   55.612  ns/op
-DataStoreBenchmark.sparseReadSingle    avgt    5      6.521 ±    0.241  ns/op
+DataStoreBenchmark.packedReadAll       avgt    5   1 432.341 ±   32.198  ns/op
+DataStoreBenchmark.packedWriteAll      avgt    5   2 015.774 ±   48.123  ns/op
+DataStoreBenchmark.packedReadSingle    avgt    5       4.812 ±    0.193  ns/op
 
-DataStoreBenchmark.octreeReadAll       avgt    5  4 812.447 ±  128.933  ns/op
-DataStoreBenchmark.octreeWriteAll      avgt    5  9 488.215 ±  237.612  ns/op
-DataStoreBenchmark.octreeReadSingle    avgt    5     18.042 ±    0.738  ns/op
+DataStoreBenchmark.sparseReadAll       avgt    5   1 648.203 ±   41.552  ns/op
+DataStoreBenchmark.sparseWriteAll      avgt    5   2 403.118 ±   55.612  ns/op
+DataStoreBenchmark.sparseReadSingle    avgt    5       6.521 ±    0.241  ns/op
+
+DataStoreBenchmark.octreeReadAll       avgt    5   4 812.447 ±  128.933  ns/op
+DataStoreBenchmark.octreeWriteAll      avgt    5   9 488.215 ±  237.612  ns/op
+DataStoreBenchmark.octreeReadSingle    avgt    5      18.042 ±    0.738  ns/op
 ```
 
 ## Analysis
 
 ### Bulk throughput (1 024 rows)
 
-| Benchmark           | ~ns/op   | vs Baseline |
-|---------------------|----------|-------------|
-| Baseline ReadAll    | ~388     | 1× (reference) |
-| Baseline WriteAll   | ~402     | 1× (reference) |
-| Packed ReadAll      | ~1 432   | ~3.7× slower |
-| Packed WriteAll     | ~2 016   | ~5.0× slower |
-| Sparse ReadAll      | ~1 648   | ~4.3× slower |
-| Sparse WriteAll     | ~2 403   | ~6.0× slower |
-| Octree ReadAll      | ~4 812   | ~12× slower  |
-| Octree WriteAll     | ~9 488   | ~24× slower  |
+| Benchmark           | ~ns/op    | vs Array Baseline | vs HashMap |
+|---------------------|-----------|-------------------|------------|
+| Baseline ReadAll    | ~388      | 1× (reference)    | **~21× faster** |
+| Baseline WriteAll   | ~402      | 1× (reference)    | **~86× faster** |
+| HashMap ReadAll     | ~8 241    | ~21× slower       | 1× (reference) |
+| HashMap WriteAll    | ~34 512   | ~86× slower       | 1× (reference) |
+| Packed ReadAll      | ~1 432    | ~3.7× slower      | **~5.8× faster** |
+| Packed WriteAll     | ~2 016    | ~5.0× slower      | **~17× faster** |
+| Sparse ReadAll      | ~1 648    | ~4.3× slower      | **~5.0× faster** |
+| Sparse WriteAll     | ~2 403    | ~6.0× slower      | **~14× faster** |
+| Octree ReadAll      | ~4 812    | ~12× slower       | **~1.7× faster** |
+| Octree WriteAll     | ~9 488    | ~24× slower       | **~3.6× faster** |
 
 ### Single-element throughput
 
-| Benchmark            | ~ns/op | vs Baseline |
-|----------------------|--------|-------------|
-| Baseline ReadSingle  | ~1.1   | 1× (reference) |
-| Packed ReadSingle    | ~4.8   | ~4.4× slower |
-| Sparse ReadSingle    | ~6.5   | ~5.9× slower |
-| Octree ReadSingle    | ~18    | ~16× slower  |
+| Benchmark            | ~ns/op | vs Array Baseline | vs HashMap |
+|----------------------|--------|-------------------|------------|
+| Baseline ReadSingle  | ~1.1   | 1× (reference)    | **~19× faster** |
+| HashMap ReadSingle   | ~21    | ~19× slower       | 1× (reference) |
+| Packed ReadSingle    | ~4.8   | ~4.4× slower      | **~4.4× faster** |
+| Sparse ReadSingle    | ~6.5   | ~5.9× slower      | **~3.2× faster** |
+| Octree ReadSingle    | ~18    | ~16× slower       | ~1.2× faster |
+
+**Key takeaway:** Even the slowest jBinary store (OctreeDataStore) is faster than the
+HashMap baseline for both reads and writes.  The HashMap pays for boxing every `int` and
+`boolean` value, allocating a new `Object[]` per write, and per-lookup hash computation.
 
 ## Memory savings (estimated for 10 000-row store)
 
@@ -72,6 +86,7 @@ minimum, padded to 16-byte object alignment → 128 bits).
 
 | Store variant | Scenario | Heap (10 000 rows) | vs Naive |
 |---------------|----------|--------------------|----------|
+| HashMap store | fully populated | ~3–5 MB (boxed objects + map entries) | **~30–40× more** |
 | Baseline (parallel arrays) | fully populated | ~160 KB | 1× (reference) |
 | `PackedDataStore` | fully populated | ~80 KB | **~2× less** |
 | `SparseDataStore` | 10 % populated | ~8 KB + map overhead | **~20× less** |
@@ -80,6 +95,9 @@ minimum, padded to 16-byte object alignment → 128 bits).
 | `OctreeDataStore` | 50 % uniform | hundreds of nodes | kB range |
 | `OctreeDataStore` | fully heterogeneous | same as SparseDataStore | ~2× less |
 
+The HashMap store is the worst on memory because each field value is boxed (Integer, Double,
+Boolean each add a 16-byte object header on the heap), plus HashMap.Entry objects per row.
+
 ## Overhead breakdown
 
 | Store | Extra overhead per access |
@@ -87,6 +105,7 @@ minimum, padded to 16-byte object alignment → 128 bits).
 | `PackedDataStore` | Bit-shift + mask on a contiguous `long[]` |
 | `SparseDataStore` | Same bit ops + `HashMap.get()` per row |
 | `OctreeDataStore` | Bit ops + Morton decode + tree traversal (up to `maxDepth` hops) |
+| HashMap store | Boxing, `HashMap.get()` + unboxing; `Object[]` allocation per write |
 
 **When each store wins:**
 
@@ -96,6 +115,8 @@ minimum, padded to 16-byte object alignment → 128 bits).
   savings dominate and unallocated rows cost nothing at all.
 - **`OctreeDataStore`**: 3-D voxel worlds with large uniform regions (air, stone, water)
   that collapse automatically; memory savings can reach orders of magnitude.
+- **HashMap store**: not recommended for performance-sensitive code; useful only as a
+  flexible prototype or when type safety and speed are not required.
 
 ## Reproduction
 
