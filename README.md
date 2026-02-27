@@ -8,21 +8,30 @@ bit-level packing.
 
 ### 1. Define component types
 
+`DataStore<T>` is generic — the type parameter `T` is a marker that lets you express
+what kind of data a store holds.  There is **no bound** on `T`, so you can use your own
+marker interface, a concrete record type, or anything else.
+
 ```java
+import io.github.zzuegg.jbinary.BinaryComponent;
 import io.github.zzuegg.jbinary.annotation.*;
 
-// Terrain: 8-bit height (0–255), fixed-point temperature (−50…50, 2 d.p.), 1-bit active flag
+// Option A: use the built-in BinaryComponent marker (optional)
 public record Terrain(
         @BitField(min = 0, max = 255)          int height,
         @DecimalField(min = -50.0, max = 50.0, precision = 2) double temperature,
         @BoolField                              boolean active
-) {}
+) implements BinaryComponent {}
 
-// Water: 4-decimal-place salinity (0–1), frozen flag
 public record Water(
         @DecimalField(min = 0.0, max = 1.0, precision = 4) double salinity,
         @BoolField                                          boolean frozen
-) {}
+) implements BinaryComponent {}
+
+// Option B: define your own marker
+public interface WorldData {}
+public record Terrain(...) implements WorldData {}
+public record Water(...)   implements WorldData {}
 ```
 
 ### 2. Create the shared DataStore
@@ -30,7 +39,13 @@ public record Water(
 ```java
 import io.github.zzuegg.jbinary.DataStore;
 
-DataStore store = DataStore.of(10_000, Terrain.class, Water.class);
+// Single-component — fully typed
+DataStore<Terrain> terrainStore = DataStore.of(10_000, Terrain.class);
+
+// Multi-component — use your marker as the type parameter
+DataStore<BinaryComponent> store = DataStore.of(10_000, Terrain.class, Water.class);
+// or with your own marker:
+DataStore<WorldData> store = DataStore.of(10_000, Terrain.class, Water.class);
 ```
 
 Both `Terrain` and `Water` share the same `long[]` – each row holds the packed bits for
@@ -190,10 +205,12 @@ int writtenRows = ((SparseDataStore) store).allocatedRowCount();
 
 ### `OctreeDataStore` (sparse 3-D with automatic collapsing)
 
-Organises a `sideLength × sideLength × sideLength` voxel space (sideLength = 2^maxDepth)
-as a sparse octree.  On each write, the store checks whether all 8 siblings satisfy every
-registered `CollapsingFunction`; if so, those 8 child nodes are merged into a single parent
-node.  Reading traverses from the finest level upward and returns the first matching node.
+Organises a voxel space as a sparse octree.  On each write, the store checks whether all
+8 siblings satisfy every registered `CollapsingFunction`; if so, those 8 child nodes are
+merged into a single parent node.  Reading traverses from the finest level upward and
+returns the first matching node.
+
+**Uniform** (cubic) space — use `builder(int maxDepth)`:
 
 ```java
 import io.github.zzuegg.jbinary.octree.*;
@@ -204,7 +221,7 @@ record Voxel(
 ) {}
 
 // maxDepth=6 → 64 × 64 × 64 voxel space
-OctreeDataStore store = OctreeDataStore.builder(6)
+OctreeDataStore<?> store = OctreeDataStore.builder(6)
     .component(Voxel.class)                              // default: collapse on bit-equality
     .component(Water.class, CollapsingFunction.never())  // custom per-component function
     .build();
@@ -224,6 +241,20 @@ for (int x = 0; x < 64; x++)
 store.nodeCount(); // → 1  (entire space merged into root)
 ```
 
+**Non-uniform** (rectangular) space — use `builder(widthX, widthY, widthZ)`:
+
+```java
+// 100 × 100 × 10 voxel world (wide and flat)
+OctreeDataStore<?> store = OctreeDataStore.builder(100, 100, 10)
+    .component(Voxel.class)
+    .build();
+
+// store.widthX() → 100, store.widthY() → 100, store.widthZ() → 10
+// store.capacity() → 100 * 100 * 10 = 100 000
+material.set(store, store.row(99, 99, 9), 3);  // corner voxel
+// out-of-bounds: store.row(0, 0, 10) throws IllegalArgumentException
+```
+
 **`CollapsingFunction` factories:**
 
 | Factory | Behaviour |
@@ -238,15 +269,20 @@ store.nodeCount(); // → 1  (entire space merged into root)
 Drop-in replacement for `OctreeDataStore` that eliminates boxing overhead by using a
 primitive open-addressing hash map and a flat arena `long[]` instead of
 `HashMap<Long, long[]>`.  Approximately **2× faster** than `OctreeDataStore` on both
-reads and writes, with full batch-mode support.
+reads and writes, with full batch-mode support.  Supports the same uniform and
+non-uniform builder API.
 
 ```java
 import io.github.zzuegg.jbinary.octree.FastOctreeDataStore;
 
-// maxDepth=6 → 64 × 64 × 64 voxel space
-FastOctreeDataStore store = FastOctreeDataStore.builder(6)
-    .component(Voxel.class)                              // default: collapse on bit-equality
-    .component(Water.class, CollapsingFunction.never())  // custom per-component function
+// Uniform: maxDepth=6 → 64 × 64 × 64
+FastOctreeDataStore<?> store = FastOctreeDataStore.builder(6)
+    .component(Voxel.class)
+    .build();
+
+// Non-uniform: 100 × 100 × 10
+FastOctreeDataStore<?> store = FastOctreeDataStore.builder(100, 100, 10)
+    .component(Voxel.class)
     .build();
 
 IntAccessor material = Accessors.intFieldInStore(store, Voxel.class, "material");

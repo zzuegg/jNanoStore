@@ -43,12 +43,12 @@ public interface RowView<T extends Record> {
      * Reads all fields of the component type from the given row in the store
      * and returns a new record instance.
      */
-    T get(DataStore store, int row);
+    T get(DataStore<?> store, int row);
 
     /**
      * Writes all fields of the given record instance to the given row in the store.
      */
-    void set(DataStore store, int row, T value);
+    void set(DataStore<?> store, int row, T value);
 
     /**
      * Creates a {@code RowView} for record type {@code T} using the given store
@@ -59,7 +59,7 @@ public interface RowView<T extends Record> {
      * @param <T>         the record type
      * @return a pre-compiled RowView
      */
-    static <T extends Record> RowView<T> of(DataStore store, Class<T> recordClass) {
+    static <T extends Record> RowView<T> of(DataStore<?> store, Class<T> recordClass) {
         return new RecordRowView<>(store, recordClass);
     }
 }
@@ -69,8 +69,8 @@ final class RecordRowView<T extends Record> implements RowView<T> {
 
     /** Per-field read/write abstraction (boxed). */
     private interface FieldAccessor {
-        Object get(DataStore store, int row);
-        void set(DataStore store, int row, Object value);
+        Object get(DataStore<?> store, int row);
+        void set(DataStore<?> store, int row, Object value);
     }
 
     private final FieldAccessor[] accessors;
@@ -78,7 +78,7 @@ final class RecordRowView<T extends Record> implements RowView<T> {
     private final MethodHandle    constructorHandle;
 
     @SuppressWarnings({"unchecked", "rawtypes"})
-    RecordRowView(DataStore store, Class<T> recordClass) {
+    RecordRowView(DataStore<?> store, Class<T> recordClass) {
         ComponentLayout compLayout = LayoutBuilder.layout(recordClass);
         RecordComponent[] rcs = recordClass.getRecordComponents();
         int n = rcs.length;
@@ -169,7 +169,7 @@ final class RecordRowView<T extends Record> implements RowView<T> {
 
     @Override
     @SuppressWarnings("unchecked")
-    public T get(DataStore store, int row) {
+    public T get(DataStore<?> store, int row) {
         Object[] args = new Object[accessors.length];
         for (int i = 0; i < accessors.length; i++) {
             args[i] = accessors[i].get(store, row);
@@ -182,7 +182,7 @@ final class RecordRowView<T extends Record> implements RowView<T> {
     }
 
     @Override
-    public void set(DataStore store, int row, T value) {
+    public void set(DataStore<?> store, int row, T value) {
         for (int i = 0; i < accessors.length; i++) {
             Object fieldVal;
             try {

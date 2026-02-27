@@ -35,7 +35,7 @@ import java.util.*;
  * <p><strong>Thread safety:</strong> not thread-safe.</p>
  * <p><strong>maxDepth limit:</strong> 1–10.</p>
  */
-public final class FastOctreeDataStore implements DataStore {
+public final class FastOctreeDataStore<T> implements DataStore<T> {
 
     // -----------------------------------------------------------------------
     // Hash map sentinels and constants
@@ -51,8 +51,11 @@ public final class FastOctreeDataStore implements DataStore {
     // Fields
 
     private final int maxDepth;
-    private final int sideLength;
-    private final int capacity;
+    private final int sideLength;   // 1 << maxDepth  (internal Morton grid resolution)
+    private final int widthX;       // actual user-facing X bound
+    private final int widthY;       // actual user-facing Y bound
+    private final int widthZ;       // actual user-facing Z bound
+    private final int capacity;     // widthX * widthY * widthZ
     private final int rowStrideLongs;
 
     private final Map<Class<?>, Integer> componentBitOffsets;
@@ -81,24 +84,63 @@ public final class FastOctreeDataStore implements DataStore {
     // -----------------------------------------------------------------------
     // Builder
 
-    /** Returns a {@link Builder} for a fast octree with the given maximum depth. */
+    /** Returns a {@link Builder} for a uniform fast octree with the given maximum depth. */
     public static Builder builder(int maxDepth) {
         return new Builder(maxDepth);
+    }
+
+    /**
+     * Returns a {@link Builder} for a non-uniform fast octree with independent per-axis sizes.
+     *
+     * @param widthX  voxel count along the X axis; must be ≥ 1
+     * @param widthY  voxel count along the Y axis; must be ≥ 1
+     * @param widthZ  voxel count along the Z axis; must be ≥ 1
+     */
+    public static Builder builder(int widthX, int widthY, int widthZ) {
+        return new Builder(widthX, widthY, widthZ);
     }
 
     /** Builder for {@link FastOctreeDataStore}. */
     public static final class Builder {
 
         private final int maxDepth;
+        private final int widthX, widthY, widthZ;
         private final List<Class<?>> components = new ArrayList<>();
         private final Map<Class<?>, CollapsingFunction> functions = new LinkedHashMap<>();
 
+        /** Uniform builder: widthX = widthY = widthZ = 1 << maxDepth. */
         private Builder(int maxDepth) {
             if (maxDepth < 1 || maxDepth > 10) {
                 throw new IllegalArgumentException(
                         "maxDepth must be between 1 and 10, got " + maxDepth);
             }
             this.maxDepth = maxDepth;
+            this.widthX = this.widthY = this.widthZ = 1 << maxDepth;
+        }
+
+        /** Non-uniform builder: each axis has its own size. */
+        private Builder(int widthX, int widthY, int widthZ) {
+            if (widthX < 1 || widthY < 1 || widthZ < 1) {
+                throw new IllegalArgumentException(
+                        "All dimensions must be >= 1, got widthX=" + widthX
+                        + " widthY=" + widthY + " widthZ=" + widthZ);
+            }
+            int depthX = bitsForSize(widthX);
+            int depthY = bitsForSize(widthY);
+            int depthZ = bitsForSize(widthZ);
+            int depth  = Math.max(depthX, Math.max(depthY, depthZ));
+            if (depth > 10) {
+                throw new IllegalArgumentException(
+                        "Dimensions too large: resulting maxDepth=" + depth + " exceeds 10");
+            }
+            this.maxDepth = depth;
+            this.widthX = widthX;
+            this.widthY = widthY;
+            this.widthZ = widthZ;
+        }
+
+        private static int bitsForSize(int n) {
+            return Math.max(1, 64 - Long.numberOfLeadingZeros(n - 1));
         }
 
         /** Registers a component with the default {@link CollapsingFunction#equalBits()} function. */
@@ -120,19 +162,21 @@ public final class FastOctreeDataStore implements DataStore {
         }
 
         /** Builds and returns the configured {@link FastOctreeDataStore}. */
-        public FastOctreeDataStore build() {
+        public FastOctreeDataStore<?> build() {
             if (components.isEmpty()) {
                 throw new IllegalArgumentException("At least one component class is required");
             }
-            return FastOctreeDataStore.create(maxDepth, components, functions);
+            return FastOctreeDataStore.create(maxDepth, widthX, widthY, widthZ, components, functions);
         }
     }
 
     // -----------------------------------------------------------------------
     // Internal factory
 
-    private static FastOctreeDataStore create(int maxDepth, List<Class<?>> components,
-                                               Map<Class<?>, CollapsingFunction> functions) {
+    @SuppressWarnings("unchecked")
+    private static <T> FastOctreeDataStore<T> create(int maxDepth, int widthX, int widthY, int widthZ,
+                                                       List<Class<?>> components,
+                                                       Map<Class<?>, CollapsingFunction> functions) {
         Map<Class<?>, ComponentLayout> layouts = new LinkedHashMap<>();
         for (Class<?> cls : components) {
             layouts.put(cls, LayoutBuilder.layout(cls));
@@ -148,19 +192,23 @@ public final class FastOctreeDataStore implements DataStore {
         }
         int rowStride = Math.max(1, (bitCursor + 63) / 64);
 
-        return new FastOctreeDataStore(maxDepth, rowStride,
+        return new FastOctreeDataStore<>(maxDepth, widthX, widthY, widthZ, rowStride,
                 Collections.unmodifiableMap(offsets),
                 Collections.unmodifiableMap(widths),
                 Collections.unmodifiableMap(new LinkedHashMap<>(functions)));
     }
 
-    private FastOctreeDataStore(int maxDepth, int rowStrideLongs,
+    private FastOctreeDataStore(int maxDepth, int widthX, int widthY, int widthZ,
+                                 int rowStrideLongs,
                                  Map<Class<?>, Integer> offsets,
                                  Map<Class<?>, Integer> widths,
                                  Map<Class<?>, CollapsingFunction> functions) {
         this.maxDepth = maxDepth;
         this.sideLength = 1 << maxDepth;
-        this.capacity = 1 << (3 * maxDepth);
+        this.widthX = widthX;
+        this.widthY = widthY;
+        this.widthZ = widthZ;
+        this.capacity = widthX * widthY * widthZ;
         this.rowStrideLongs = rowStrideLongs;
         this.componentBitOffsets = offsets;
         this.componentBitWidths = widths;
@@ -259,8 +307,21 @@ public final class FastOctreeDataStore implements DataStore {
     /** Returns the maximum depth of this octree (1–10). */
     public int maxDepth() { return maxDepth; }
 
-    /** Returns the number of voxels along each axis ({@code 1 << maxDepth}). */
+    /**
+     * Returns the number of voxels along each axis for uniform stores
+     * ({@code 1 << maxDepth}).  For non-uniform stores use
+     * {@link #widthX()}, {@link #widthY()}, {@link #widthZ()}.
+     */
     public int sideLength() { return sideLength; }
+
+    /** Returns the actual user-facing voxel count along the X axis. */
+    public int widthX() { return widthX; }
+
+    /** Returns the actual user-facing voxel count along the Y axis. */
+    public int widthY() { return widthY; }
+
+    /** Returns the actual user-facing voxel count along the Z axis. */
+    public int widthZ() { return widthZ; }
 
     /** Returns the number of nodes currently allocated. */
     public int nodeCount() { return mapLive; }
@@ -308,7 +369,9 @@ public final class FastOctreeDataStore implements DataStore {
         DataOutputStream dos = new DataOutputStream(out);
         dos.writeInt(MAGIC);
         dos.writeByte(TYPE_FAST_OCT);
-        dos.writeInt(maxDepth);
+        dos.writeInt(widthX);
+        dos.writeInt(widthY);
+        dos.writeInt(widthZ);
         dos.writeInt(rowStrideLongs);
         dos.writeInt(mapLive);
         for (int i = 0; i < mapKeys.length; i++) {
@@ -333,12 +396,17 @@ public final class FastOctreeDataStore implements DataStore {
         int type = dis.readByte();
         if (type != TYPE_FAST_OCT) throw new IOException(
                 "Expected fast octree store (type 3), got type " + type);
-        int depth  = dis.readInt();
+        int wx     = dis.readInt();
+        int wy     = dis.readInt();
+        int wz     = dis.readInt();
         int stride = dis.readInt();
-        if (depth != maxDepth || stride != rowStrideLongs) throw new IllegalArgumentException(
-                "Store metadata mismatch: stream has maxDepth=" + depth +
-                " rowStride=" + stride + " but store has maxDepth=" + maxDepth +
-                " rowStride=" + rowStrideLongs);
+        if (wx != widthX || wy != widthY || wz != widthZ || stride != rowStrideLongs) {
+            throw new IllegalArgumentException(
+                    "Store metadata mismatch: stream has widthX=" + wx + " widthY=" + wy
+                    + " widthZ=" + wz + " rowStride=" + stride
+                    + " but store has widthX=" + widthX + " widthY=" + widthY
+                    + " widthZ=" + widthZ + " rowStride=" + rowStrideLongs);
+        }
         // Reset
         hashInit(64);
         this.arena = new long[32 * rowStrideLongs];
@@ -635,10 +703,11 @@ public final class FastOctreeDataStore implements DataStore {
     }
 
     private void checkCoords(int x, int y, int z) {
-        if (x < 0 || x >= sideLength || y < 0 || y >= sideLength || z < 0 || z >= sideLength) {
+        if (x < 0 || x >= widthX || y < 0 || y >= widthY || z < 0 || z >= widthZ) {
             throw new IllegalArgumentException(
                     "Coordinates (" + x + "," + y + "," + z +
-                    ") out of bounds for sideLength=" + sideLength);
+                    ") out of bounds for widthX=" + widthX
+                    + " widthY=" + widthY + " widthZ=" + widthZ);
         }
     }
 }

@@ -29,7 +29,7 @@ import java.util.*;
  *
  * <p>Use {@link DataStore#sparse} to create instances.</p>
  */
-public final class SparseDataStore implements DataStore {
+public final class SparseDataStore<T> implements DataStore<T> {
 
     private final int capacity;
     private final int rowStrideLongs;
@@ -42,7 +42,8 @@ public final class SparseDataStore implements DataStore {
 
     // -----------------------------------------------------------------------
 
-    static DataStore create(int capacity, Class<?>... componentClasses) {
+    @SuppressWarnings("unchecked")
+    static <T> DataStore<T> create(int capacity, Class<?>... componentClasses) {
         if (capacity < 0) throw new IllegalArgumentException(
                 "capacity must be >= 0, got " + capacity);
         if (componentClasses == null || componentClasses.length == 0) {
@@ -63,7 +64,7 @@ public final class SparseDataStore implements DataStore {
         int rowStrideLongs = (rowBits + 63) / 64;
         if (rowStrideLongs == 0) rowStrideLongs = 1;
 
-        return new SparseDataStore(capacity, rowStrideLongs,
+        return new SparseDataStore<>(capacity, rowStrideLongs,
                 Collections.unmodifiableMap(offsets));
     }
 

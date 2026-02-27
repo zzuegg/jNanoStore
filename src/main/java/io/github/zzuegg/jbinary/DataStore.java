@@ -7,24 +7,35 @@ import java.io.OutputStream;
 /**
  * Base interface for a bit-packed datastore.
  *
- * <p>A DataStore holds {@link #capacity()} rows; each row can contain data from one or
- * more annotated component types packed together in a fixed bit-stride.  Three concrete
- * implementations are provided:
+ * <p>A {@code DataStore<T>} holds {@link #capacity()} rows; each row can contain data
+ * from one or more annotated component types packed together in a fixed bit-stride.
+ * The type parameter {@code T} is a marker that lets callers express what kind of data
+ * the store holds — there is no bound on {@code T}, so you can use your own marker
+ * interfaces, a concrete component type, or any other type that makes sense in context.
+ *
+ * <p>Four concrete implementations are provided:
  * <ul>
  *   <li>{@link PackedDataStore} — dense, pre-allocates a single {@code long[]} for all rows.</li>
  *   <li>{@link SparseDataStore} — sparse, allocates storage only for rows that are written to;
  *       unwritten rows read back as all-zeros.</li>
+ *   <li>{@link io.github.zzuegg.jbinary.octree.OctreeDataStore} — sparse 3-D octree with
+ *       automatic region collapsing.</li>
  *   <li>{@link io.github.zzuegg.jbinary.octree.FastOctreeDataStore} — high-performance octree
  *       store using a primitive open-addressing hash map and a flat arena allocator.</li>
  * </ul>
  *
  * <p>Use the static factory methods to create instances:
  * <pre>{@code
- * DataStore packed = DataStore.of(10_000, Terrain.class, Water.class);
- * DataStore sparse = DataStore.sparse(10_000, Terrain.class, Water.class);
+ * // Single-component — fully typed
+ * DataStore<Terrain> store = DataStore.of(10_000, Terrain.class);
+ *
+ * // Multi-component — use a shared marker or Object
+ * DataStore<WorldData> store = DataStore.of(10_000, Terrain.class, Water.class);
  * }</pre>
+ *
+ * @param <T> marker type for the stored component(s); unconstrained
  */
-public interface DataStore {
+public interface DataStore<T> {
 
     /** Returns the maximum number of rows this store was created with. */
     int capacity();
@@ -107,15 +118,19 @@ public interface DataStore {
      * @throws IllegalArgumentException if no component classes are supplied, if any class
      *         has no annotated fields, or if the resulting array would overflow
      */
-    static DataStore of(int capacity, Class<?>... componentClasses) {
-        return PackedDataStore.create(capacity, componentClasses);
+    @SafeVarargs
+    @SuppressWarnings("unchecked")
+    static <T> DataStore<T> of(int capacity, Class<? extends T>... componentClasses) {
+        return (DataStore<T>) PackedDataStore.create(capacity, componentClasses);
     }
 
     /**
      * Creates a dense (packed) DataStore; equivalent to {@link #of}.
      */
-    static DataStore packed(int capacity, Class<?>... componentClasses) {
-        return PackedDataStore.create(capacity, componentClasses);
+    @SafeVarargs
+    @SuppressWarnings("unchecked")
+    static <T> DataStore<T> packed(int capacity, Class<? extends T>... componentClasses) {
+        return (DataStore<T>) PackedDataStore.create(capacity, componentClasses);
     }
 
     /**
@@ -128,7 +143,9 @@ public interface DataStore {
      * @throws IllegalArgumentException if no component classes are supplied, if any class
      *         has no annotated fields, or if {@code capacity} is negative
      */
-    static DataStore sparse(int capacity, Class<?>... componentClasses) {
-        return SparseDataStore.create(capacity, componentClasses);
+    @SafeVarargs
+    @SuppressWarnings("unchecked")
+    static <T> DataStore<T> sparse(int capacity, Class<? extends T>... componentClasses) {
+        return (DataStore<T>) SparseDataStore.create(capacity, componentClasses);
     }
 }

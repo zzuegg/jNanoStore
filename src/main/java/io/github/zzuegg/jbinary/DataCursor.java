@@ -61,9 +61,9 @@ public final class DataCursor<T> {
     /** Binds one cursor field to one DataStore bit-range via pre-computed accessors. */
     private interface Binding {
         /** Read from store → write into the cursor instance. */
-        void load(Object instance, DataStore store, int row);
+        void load(Object instance, DataStore<?> store, int row);
         /** Read from cursor instance → write into store. */
-        void flush(Object instance, DataStore store, int row);
+        void flush(Object instance, DataStore<?> store, int row);
     }
 
     private final T        instance;
@@ -84,7 +84,7 @@ public final class DataCursor<T> {
      * @param store the DataStore to read from
      * @param row   row index
      */
-    public void load(DataStore store, int row) {
+    public void load(DataStore<?> store, int row) {
         for (Binding b : bindings) b.load(instance, store, row);
     }
 
@@ -94,7 +94,7 @@ public final class DataCursor<T> {
      * @param store the DataStore to write to
      * @param row   row index
      */
-    public void flush(DataStore store, int row) {
+    public void flush(DataStore<?> store, int row) {
         for (Binding b : bindings) b.flush(instance, store, row);
     }
 
@@ -105,7 +105,7 @@ public final class DataCursor<T> {
      * @param row   row index
      * @return the cursor's held instance, populated with the row's values
      */
-    public T update(DataStore store, int row) {
+    public T update(DataStore<?> store, int row) {
         load(store, row);
         return instance;
     }
@@ -139,7 +139,7 @@ public final class DataCursor<T> {
      * @return a fully pre-compiled {@code DataCursor}
      * @throws IllegalArgumentException if any {@link StoreField} mapping is invalid
      */
-    public static <T> DataCursor<T> of(DataStore store, Class<T> cls) {
+    public static <T> DataCursor<T> of(DataStore<?> store, Class<T> cls) {
         Field[] fields = cls.getDeclaredFields();
 
         // Count annotated fields
@@ -213,29 +213,29 @@ public final class DataCursor<T> {
         if (type == int.class) {
             IntAccessor acc = new IntAccessor(absOffset, fl.bitWidth(), fl.minRaw());
             return new Binding() {
-                public void load(Object inst, DataStore s, int r)  { vh.set(inst, acc.get(s, r)); }
-                public void flush(Object inst, DataStore s, int r) { acc.set(s, r, (int) vh.get(inst)); }
+                public void load(Object inst, DataStore<?> s, int r)  { vh.set(inst, acc.get(s, r)); }
+                public void flush(Object inst, DataStore<?> s, int r) { acc.set(s, r, (int) vh.get(inst)); }
             };
         }
         if (type == long.class) {
             LongAccessor acc = new LongAccessor(absOffset, fl.bitWidth(), fl.minRaw());
             return new Binding() {
-                public void load(Object inst, DataStore s, int r)  { vh.set(inst, acc.get(s, r)); }
-                public void flush(Object inst, DataStore s, int r) { acc.set(s, r, (long) vh.get(inst)); }
+                public void load(Object inst, DataStore<?> s, int r)  { vh.set(inst, acc.get(s, r)); }
+                public void flush(Object inst, DataStore<?> s, int r) { acc.set(s, r, (long) vh.get(inst)); }
             };
         }
         if (type == double.class) {
             DoubleAccessor acc = new DoubleAccessor(absOffset, fl.bitWidth(), fl.minRaw(), fl.scale());
             return new Binding() {
-                public void load(Object inst, DataStore s, int r)  { vh.set(inst, acc.get(s, r)); }
-                public void flush(Object inst, DataStore s, int r) { acc.set(s, r, (double) vh.get(inst)); }
+                public void load(Object inst, DataStore<?> s, int r)  { vh.set(inst, acc.get(s, r)); }
+                public void flush(Object inst, DataStore<?> s, int r) { acc.set(s, r, (double) vh.get(inst)); }
             };
         }
         if (type == boolean.class) {
             BoolAccessor acc = new BoolAccessor(absOffset);
             return new Binding() {
-                public void load(Object inst, DataStore s, int r)  { vh.set(inst, acc.get(s, r)); }
-                public void flush(Object inst, DataStore s, int r) { acc.set(s, r, (boolean) vh.get(inst)); }
+                public void load(Object inst, DataStore<?> s, int r)  { vh.set(inst, acc.get(s, r)); }
+                public void flush(Object inst, DataStore<?> s, int r) { acc.set(s, r, (boolean) vh.get(inst)); }
             };
         }
         if (type.isEnum()) {
@@ -263,9 +263,9 @@ public final class DataCursor<T> {
                     (Class<? extends Enum>) type, useExplicit);
             return new Binding() {
                 @SuppressWarnings("unchecked")
-                public void load(Object inst, DataStore s, int r)  { vh.set(inst, acc.get(s, r)); }
+                public void load(Object inst, DataStore<?> s, int r)  { vh.set(inst, acc.get(s, r)); }
                 @SuppressWarnings("unchecked")
-                public void flush(Object inst, DataStore s, int r) { acc.set(s, r, (Enum) vh.get(inst)); }
+                public void flush(Object inst, DataStore<?> s, int r) { acc.set(s, r, (Enum) vh.get(inst)); }
             };
         }
         throw new IllegalArgumentException(

@@ -19,7 +19,7 @@ import java.lang.reflect.RecordComponent;
  *     BoolAccessor   ACTIVE      = Accessors.boolField(Terrain.class,     "active");
  * }
  *
- * DataStore store = DataStore.of(1000, Terrain.class, Water.class);
+ * DataStore<?> store = DataStore.of(1000, Terrain.class, Water.class);
  * int h = Terrain.HEIGHT.get(store, i);
  * Terrain.HEIGHT.set(store, i, 200);
  * }</pre>
@@ -82,25 +82,25 @@ public final class Accessors {
     // ------------------------------------------------------------------
     // Store-aware accessors (absolute bit offset = component offset in store + field offset)
 
-    public static IntAccessor intFieldInStore(DataStore store, Class<?> component, String fieldName) {
+    public static IntAccessor intFieldInStore(DataStore<?> store, Class<?> component, String fieldName) {
         FieldLayout fl = layout(component, fieldName);
         int abs = store.componentBitOffset(component) + fl.bitOffset();
         return new IntAccessor(abs, fl.bitWidth(), fl.minRaw());
     }
 
-    public static LongAccessor longFieldInStore(DataStore store, Class<?> component, String fieldName) {
+    public static LongAccessor longFieldInStore(DataStore<?> store, Class<?> component, String fieldName) {
         FieldLayout fl = layout(component, fieldName);
         int abs = store.componentBitOffset(component) + fl.bitOffset();
         return new LongAccessor(abs, fl.bitWidth(), fl.minRaw());
     }
 
-    public static DoubleAccessor doubleFieldInStore(DataStore store, Class<?> component, String fieldName) {
+    public static DoubleAccessor doubleFieldInStore(DataStore<?> store, Class<?> component, String fieldName) {
         FieldLayout fl = layout(component, fieldName);
         int abs = store.componentBitOffset(component) + fl.bitOffset();
         return new DoubleAccessor(abs, fl.bitWidth(), fl.minRaw(), fl.scale());
     }
 
-    public static BoolAccessor boolFieldInStore(DataStore store, Class<?> component, String fieldName) {
+    public static BoolAccessor boolFieldInStore(DataStore<?> store, Class<?> component, String fieldName) {
         FieldLayout fl = layout(component, fieldName);
         int abs = store.componentBitOffset(component) + fl.bitOffset();
         return new BoolAccessor(abs);
@@ -108,7 +108,7 @@ public final class Accessors {
 
     @SuppressWarnings("unchecked")
     public static <E extends Enum<E>> EnumAccessor<E> enumFieldInStore(
-            DataStore store, Class<?> component, String fieldName) {
+            DataStore<?> store, Class<?> component, String fieldName) {
         FieldLayout fl = layout(component, fieldName);
         int abs = store.componentBitOffset(component) + fl.bitOffset();
         Class<E> enumType = enumType(component, fieldName);
@@ -168,7 +168,7 @@ public final class Accessors {
      * @param <T>         the record type
      * @return a {@link RowView} with all field accessors pre-computed
      */
-    public static <T extends Record> RowView<T> rowViewInStore(DataStore store, Class<T> recordClass) {
+    public static <T extends Record> RowView<T> rowViewInStore(DataStore<?> store, Class<T> recordClass) {
         return RowView.of(store, recordClass);
     }
 
@@ -188,7 +188,7 @@ public final class Accessors {
      * @param <T>   cursor type
      * @return a pre-compiled {@link DataCursor}
      */
-    public static <T> DataCursor<T> dataCursorOf(DataStore store, Class<T> cls) {
+    public static <T> DataCursor<T> dataCursorOf(DataStore<?> store, Class<T> cls) {
         return DataCursor.of(store, cls);
     }
 }
