@@ -381,7 +381,7 @@ JMH 1.37, 1 024-row dataset:
 
 ```mermaid
 xychart-beta
-    title "Bulk Read Throughput — 1 024 rows (ns/op, lower is better)"
+    title "Bulk Read Throughput - 1024 rows (ns/op, lower is better)"
     x-axis ["Baseline", "Packed", "PkdCursor", "PkdRowView", "Sparse", "SprsCursor", "Octree", "FstOctree", "HashMap"]
     y-axis "ns/op" 0 --> 9000
     bar [388, 1432, 1520, 3800, 1648, 1720, 4812, 2200, 8241]
@@ -389,7 +389,7 @@ xychart-beta
 
 ```mermaid
 xychart-beta
-    title "Bulk Write Throughput — 1 024 rows (ns/op, lower is better)"
+    title "Bulk Write Throughput - 1024 rows (ns/op, lower is better)"
     x-axis ["Baseline", "Packed", "PkdCursor", "PkdRowView", "Sparse", "SprsCursor", "OctBatch", "FstOctBatch", "HashMap"]
     y-axis "ns/op" 0 --> 36000
     bar [402, 2016, 2100, 4200, 2403, 2490, 4500, 2000, 34512]

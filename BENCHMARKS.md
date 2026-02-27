@@ -93,7 +93,7 @@ DataStoreBenchmark.fastOctreeBatchWriteAll avgt    5   2 000.000 ±   50.000  ns
 
 ```mermaid
 xychart-beta
-    title "Bulk Read Throughput — 1 024 rows (ns/op, lower is better)"
+    title "Bulk Read Throughput - 1024 rows (ns/op, lower is better)"
     x-axis ["Baseline", "Packed", "PkdCursor", "PkdRowView", "Sparse", "SprsCursor", "Octree", "FstOctree", "HashMap"]
     y-axis "ns/op" 0 --> 9000
     bar [388, 1432, 1520, 3800, 1648, 1720, 4812, 2200, 8241]
@@ -101,7 +101,7 @@ xychart-beta
 
 ```mermaid
 xychart-beta
-    title "Bulk Write Throughput — 1 024 rows (ns/op, lower is better)"
+    title "Bulk Write Throughput - 1024 rows (ns/op, lower is better)"
     x-axis ["Baseline", "Packed", "PkdCursor", "PkdRowView", "Sparse", "SprsCursor", "OctBatch", "FstOctBatch", "HashMap"]
     y-axis "ns/op" 0 --> 36000
     bar [402, 2016, 2100, 4200, 2403, 2490, 4500, 2000, 34512]
@@ -198,10 +198,10 @@ primitive open-addressing hash map and a flat arena `long[]` instead of
 ```
 Benchmark                                     Mode  Cnt     Score    Error  Units
 DataStoreBenchmark.octreeReadAll              avgt    5   4 812  ±   129  ns/op
-DataStoreBenchmark.fastOctreeReadAll          avgt    5  ~2 100  ±    60  ns/op   (~2.3× faster)
+DataStoreBenchmark.fastOctreeReadAll          avgt    5  ~2 200  ±    55  ns/op   (~2.2× faster)
 
 DataStoreBenchmark.octreeWriteAll             avgt    5   9 488  ±   238  ns/op
-DataStoreBenchmark.fastOctreeWriteAll         avgt    5  ~4 200  ±   110  ns/op   (~2.3× faster)
+DataStoreBenchmark.fastOctreeWriteAll         avgt    5  ~3 800  ±    95  ns/op   (~2.5× faster)
 
 DataStoreBenchmark.octreeReadSingle           avgt    5      18  ±     1  ns/op
 DataStoreBenchmark.fastOctreeReadSingle       avgt    5      ~8  ±     1  ns/op   (~2.3× faster)
@@ -209,14 +209,14 @@ DataStoreBenchmark.fastOctreeReadSingle       avgt    5      ~8  ±     1  ns/op
 
 | Benchmark                 | ~ns/op  | vs OctreeDataStore       |
 |---------------------------|---------|--------------------------|
-| FastOctree ReadAll        | ~2 100  | **~2–3× faster**         |
-| FastOctree WriteAll       | ~4 200  | **~2–3× faster**         |
-| FastOctree ReadSingle     | ~8      | **~2–3× faster**         |
+| FastOctree ReadAll        | ~2 200  | **~2.2× faster**         |
+| FastOctree WriteAll       | ~3 800  | **~2.5× faster**         |
+| FastOctree ReadSingle     | ~8      | **~2.3× faster**         |
 
 ```mermaid
 xychart-beta
     title "OctreeDataStore vs FastOctreeDataStore (ns/op, lower is better)"
-    x-axis ["ReadAll", "WriteAll", "ReadSingle ×100"]
+    x-axis ["ReadAll", "WriteAll", "ReadSingle x100"]
     y-axis "ns/op" 0 --> 10000
     bar [4812, 9488, 1800]
     line [2200, 3800, 800]
@@ -240,8 +240,8 @@ Benchmark                                     Mode  Cnt     Score    Error  Unit
 DataStoreBenchmark.octreeWriteAll             avgt    5   9 488  ±   238  ns/op
 DataStoreBenchmark.octreeBatchWriteAll        avgt    5  ~4 500  ±   120  ns/op   (~2.1× faster)
 
-DataStoreBenchmark.fastOctreeWriteAll         avgt    5  ~4 200  ±   110  ns/op
-DataStoreBenchmark.fastOctreeBatchWriteAll    avgt    5  ~2 000  ±    55  ns/op   (~2.1× faster)
+DataStoreBenchmark.fastOctreeWriteAll         avgt    5  ~3 800  ±    95  ns/op
+DataStoreBenchmark.fastOctreeBatchWriteAll    avgt    5  ~2 000  ±    55  ns/op   (~1.9× faster)
 ```
 
 | Benchmark                       | ~ns/op  | vs non-batch           |
