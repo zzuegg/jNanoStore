@@ -8,12 +8,14 @@ import java.io.OutputStream;
  * Base interface for a bit-packed datastore.
  *
  * <p>A DataStore holds {@link #capacity()} rows; each row can contain data from one or
- * more annotated component types packed together in a fixed bit-stride.  Two concrete
+ * more annotated component types packed together in a fixed bit-stride.  Three concrete
  * implementations are provided:
  * <ul>
  *   <li>{@link PackedDataStore} — dense, pre-allocates a single {@code long[]} for all rows.</li>
  *   <li>{@link SparseDataStore} — sparse, allocates storage only for rows that are written to;
  *       unwritten rows read back as all-zeros.</li>
+ *   <li>{@link io.github.zzuegg.jbinary.octree.FastOctreeDataStore} — high-performance octree
+ *       store using a primitive open-addressing hash map and a flat arena allocator.</li>
  * </ul>
  *
  * <p>Use the static factory methods to create instances:
@@ -73,6 +75,26 @@ public interface DataStore {
      * @throws IllegalArgumentException if the stream metadata does not match this store
      */
     void read(InputStream in) throws IOException;
+
+    // -----------------------------------------------------------------------
+    // Batch write support
+
+    /**
+     * Signals the start of a batch write operation.
+     *
+     * <p>Implementations may defer expensive post-write operations (e.g. octree collapse)
+     * until {@link #endBatch()} is called.  For flat stores ({@link PackedDataStore},
+     * {@link SparseDataStore}) this is a no-op.</p>
+     */
+    default void beginBatch() {}
+
+    /**
+     * Signals the end of a batch write operation and flushes any deferred work.
+     *
+     * <p>Must be called after every {@link #beginBatch()} to ensure correctness.
+     * For flat stores this is a no-op.</p>
+     */
+    default void endBatch() {}
 
     // -----------------------------------------------------------------------
     // Static factories

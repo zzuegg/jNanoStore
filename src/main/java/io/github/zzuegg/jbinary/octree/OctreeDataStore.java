@@ -77,6 +77,9 @@ public final class OctreeDataStore implements DataStore {
     // sparse node storage: nodeId → long[rowStrideLongs] row data
     private final HashMap<Long, long[]> nodes;
 
+    // batch mode: when true, writeBitsAt defers tryCollapse until endBatch()
+    private boolean inBatch = false;
+
     // -----------------------------------------------------------------------
     // Builder
 
@@ -278,7 +281,7 @@ public final class OctreeDataStore implements DataStore {
         long[] row = nodes.computeIfAbsent(nodeId(maxDepth, x, y, z),
                                            k -> new long[rowStrideLongs]);
         writeBitsToRow(row, bitOffset, bitWidth, value);
-        tryCollapse(maxDepth, x, y, z);
+        if (!inBatch) tryCollapse(maxDepth, x, y, z);
     }
 
     // -----------------------------------------------------------------------
@@ -295,6 +298,33 @@ public final class OctreeDataStore implements DataStore {
      * interior nodes).  Useful for monitoring compression effectiveness.
      */
     public int nodeCount() { return nodes.size(); }
+
+    // -----------------------------------------------------------------------
+    // Batch mode
+
+    @Override
+    public void beginBatch() {
+        this.inBatch = true;
+    }
+
+    @Override
+    public void endBatch() {
+        if (!inBatch) return;
+        inBatch = false;
+        // Snapshot all leaf-level keys to avoid ConcurrentModificationException
+        List<Long> snapshot = new ArrayList<>(nodes.keySet());
+        for (long key : snapshot) {
+            // Check containsKey because an earlier tryCollapse in this loop may have
+            // removed this leaf as part of collapsing its sibling group.
+            if ((int)(key >>> 30) == maxDepth && nodes.containsKey(key)) {
+                long morton = key & 0x3FFFFFFFL;
+                int x = unspread3(morton);
+                int y = unspread3(morton >>> 1);
+                int z = unspread3(morton >>> 2);
+                tryCollapse(maxDepth, x, y, z);
+            }
+        }
+    }
 
     // -----------------------------------------------------------------------
     // Serialization (type tag = 2)

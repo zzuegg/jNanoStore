@@ -6,6 +6,7 @@ import io.github.zzuegg.jbinary.accessor.IntAccessor;
 import io.github.zzuegg.jbinary.annotation.BitField;
 import io.github.zzuegg.jbinary.annotation.BoolField;
 import io.github.zzuegg.jbinary.annotation.DecimalField;
+import io.github.zzuegg.jbinary.octree.FastOctreeDataStore;
 import io.github.zzuegg.jbinary.octree.OctreeDataStore;
 import org.openjdk.jmh.annotations.*;
 import org.openjdk.jmh.infra.Blackhole;
@@ -34,6 +35,7 @@ public class DataStoreBenchmark {
     IntAccessor    packedHeightAcc;
     DoubleAccessor packedTempAcc;
     BoolAccessor   packedActiveAcc;
+    RowView<Terrain> packedRowView;
 
     // ------------------------------------------------------------------ sparse store
     DataStore sparseStore;
@@ -48,6 +50,13 @@ public class DataStoreBenchmark {
     DoubleAccessor octreeTempAcc;
     BoolAccessor   octreeActiveAcc;
     int[]          octreeRows;   // pre-computed Morton-code row indices
+
+    // ------------------------------------------------------------------ fast octree store
+    FastOctreeDataStore fastOctreeStore;
+    IntAccessor    fastOctreeHeightAcc;
+    DoubleAccessor fastOctreeTempAcc;
+    BoolAccessor   fastOctreeActiveAcc;
+    int[]          fastOctreeRows;
 
     // ------------------------------------------------------------------ baseline store (parallel arrays)
     int[]     baselineHeight;
@@ -66,6 +75,7 @@ public class DataStoreBenchmark {
         packedHeightAcc = Accessors.intFieldInStore(packedStore, Terrain.class, "height");
         packedTempAcc   = Accessors.doubleFieldInStore(packedStore, Terrain.class, "temperature");
         packedActiveAcc = Accessors.boolFieldInStore(packedStore, Terrain.class, "active");
+        packedRowView   = RowView.of(packedStore, Terrain.class);
 
         // sparse store
         sparseStore = DataStore.sparse(N, Terrain.class);
@@ -88,6 +98,22 @@ public class DataStoreBenchmark {
             int y = (i >> 4) & 0xF; // 0..15
             int z = (i >> 8) & 0x3; // 0..3 (N=1024 → z in 0..3)
             octreeRows[i] = octreeStore.row(x, y, z);
+        }
+
+        // fast octree store (same layout as octree)
+        fastOctreeStore = FastOctreeDataStore.builder(4)
+                .component(Terrain.class)
+                .build();
+        fastOctreeHeightAcc = Accessors.intFieldInStore(fastOctreeStore, Terrain.class, "height");
+        fastOctreeTempAcc   = Accessors.doubleFieldInStore(fastOctreeStore, Terrain.class, "temperature");
+        fastOctreeActiveAcc = Accessors.boolFieldInStore(fastOctreeStore, Terrain.class, "active");
+
+        fastOctreeRows = new int[N];
+        for (int i = 0; i < N; i++) {
+            int x = i & 0xF;
+            int y = (i >> 4) & 0xF;
+            int z = (i >> 8) & 0x3;
+            fastOctreeRows[i] = fastOctreeStore.row(x, y, z);
         }
 
         // baseline (parallel primitive arrays)
@@ -114,6 +140,10 @@ public class DataStoreBenchmark {
             octreeHeightAcc.set(octreeStore, octreeRows[i], h);
             octreeTempAcc.set(octreeStore, octreeRows[i], t);
             octreeActiveAcc.set(octreeStore, octreeRows[i], a);
+
+            fastOctreeHeightAcc.set(fastOctreeStore, fastOctreeRows[i], h);
+            fastOctreeTempAcc.set(fastOctreeStore, fastOctreeRows[i], t);
+            fastOctreeActiveAcc.set(fastOctreeStore, fastOctreeRows[i], a);
 
             baselineHeight[i] = h;
             baselineTemp[i]   = t;
@@ -146,6 +176,23 @@ public class DataStoreBenchmark {
     @Benchmark
     public int packedReadSingle() {
         return packedHeightAcc.get(packedStore, N / 2);
+    }
+
+    // ------------------------------------------------------------------ packed RowView benchmarks
+
+    @Benchmark
+    public void packedRowViewReadAll(Blackhole bh) {
+        for (int i = 0; i < N; i++) {
+            bh.consume(packedRowView.get(packedStore, i));
+        }
+    }
+
+    @Benchmark
+    public void packedRowViewWriteAll() {
+        for (int i = 0; i < N; i++) {
+            packedRowView.set(packedStore, i,
+                    new Terrain(i % 256, (i % 100) - 50.0, (i & 1) == 0));
+        }
     }
 
     // ------------------------------------------------------------------ sparse benchmarks
@@ -196,6 +243,53 @@ public class DataStoreBenchmark {
     @Benchmark
     public int octreeReadSingle() {
         return octreeHeightAcc.get(octreeStore, octreeRows[N / 2]);
+    }
+
+    @Benchmark
+    public void octreeBatchWriteAll() {
+        octreeStore.beginBatch();
+        for (int i = 0; i < N; i++) {
+            octreeHeightAcc.set(octreeStore, octreeRows[i], i % 256);
+            octreeTempAcc.set(octreeStore, octreeRows[i], (i % 100) - 50.0);
+            octreeActiveAcc.set(octreeStore, octreeRows[i], (i & 1) == 0);
+        }
+        octreeStore.endBatch();
+    }
+
+    // ------------------------------------------------------------------ fast octree benchmarks
+
+    @Benchmark
+    public void fastOctreeReadAll(Blackhole bh) {
+        for (int i = 0; i < N; i++) {
+            bh.consume(fastOctreeHeightAcc.get(fastOctreeStore, fastOctreeRows[i]));
+            bh.consume(fastOctreeTempAcc.get(fastOctreeStore, fastOctreeRows[i]));
+            bh.consume(fastOctreeActiveAcc.get(fastOctreeStore, fastOctreeRows[i]));
+        }
+    }
+
+    @Benchmark
+    public void fastOctreeWriteAll() {
+        for (int i = 0; i < N; i++) {
+            fastOctreeHeightAcc.set(fastOctreeStore, fastOctreeRows[i], i % 256);
+            fastOctreeTempAcc.set(fastOctreeStore, fastOctreeRows[i], (i % 100) - 50.0);
+            fastOctreeActiveAcc.set(fastOctreeStore, fastOctreeRows[i], (i & 1) == 0);
+        }
+    }
+
+    @Benchmark
+    public int fastOctreeReadSingle() {
+        return fastOctreeHeightAcc.get(fastOctreeStore, fastOctreeRows[N / 2]);
+    }
+
+    @Benchmark
+    public void fastOctreeBatchWriteAll() {
+        fastOctreeStore.beginBatch();
+        for (int i = 0; i < N; i++) {
+            fastOctreeHeightAcc.set(fastOctreeStore, fastOctreeRows[i], i % 256);
+            fastOctreeTempAcc.set(fastOctreeStore, fastOctreeRows[i], (i % 100) - 50.0);
+            fastOctreeActiveAcc.set(fastOctreeStore, fastOctreeRows[i], (i & 1) == 0);
+        }
+        fastOctreeStore.endBatch();
     }
 
     // ------------------------------------------------------------------ baseline benchmarks

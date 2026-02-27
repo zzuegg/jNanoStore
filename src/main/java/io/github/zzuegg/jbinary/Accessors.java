@@ -155,4 +155,20 @@ public final class Accessors {
             throw new IllegalArgumentException(e);
         }
     }
+
+    // ------------------------------------------------------------------
+    // RowView factory
+
+    /**
+     * Creates a pre-compiled {@link RowView} for the given record component class,
+     * bound to the given store for bit-offset resolution.
+     *
+     * @param store       the DataStore the view will be used with
+     * @param recordClass the annotated record class
+     * @param <T>         the record type
+     * @return a {@link RowView} with all field accessors pre-computed
+     */
+    public static <T extends Record> RowView<T> rowViewInStore(DataStore store, Class<T> recordClass) {
+        return RowView.of(store, recordClass);
+    }
 }

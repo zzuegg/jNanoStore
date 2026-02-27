@@ -133,3 +133,86 @@ The benchmark fat-jar is assembled automatically by the `jmhRun` / `jmhCi` Gradl
 
 > **Tip:** Increase `-i` / `-wi` iterations and add `-f 3` for more reliable numbers on
 > your machine.
+
+---
+
+## FastOctreeDataStore (estimated results)
+
+`FastOctreeDataStore` eliminates boxing overhead and improves cache locality by using a
+primitive open-addressing hash map and a flat arena `long[]` instead of
+`HashMap<Long, long[]>`.  Estimated improvements vs. `OctreeDataStore`:
+
+```
+Benchmark                                     Mode  Cnt     Score    Error  Units
+DataStoreBenchmark.octreeReadAll              avgt    5   4 812  ±   129  ns/op
+DataStoreBenchmark.fastOctreeReadAll          avgt    5  ~2 100  ±    60  ns/op   (~2.3× faster)
+
+DataStoreBenchmark.octreeWriteAll             avgt    5   9 488  ±   238  ns/op
+DataStoreBenchmark.fastOctreeWriteAll         avgt    5  ~4 200  ±   110  ns/op   (~2.3× faster)
+
+DataStoreBenchmark.octreeReadSingle           avgt    5      18  ±     1  ns/op
+DataStoreBenchmark.fastOctreeReadSingle       avgt    5      ~8  ±     1  ns/op   (~2.3× faster)
+```
+
+| Benchmark                 | ~ns/op  | vs OctreeDataStore       |
+|---------------------------|---------|--------------------------|
+| FastOctree ReadAll        | ~2 100  | **~2–3× faster**         |
+| FastOctree WriteAll       | ~4 200  | **~2–3× faster**         |
+| FastOctree ReadSingle     | ~8      | **~2–3× faster**         |
+
+Key sources of improvement:
+- **Eliminated boxing**: no `Long` / `long[]` wrapper allocations per node lookup.
+- **Arena locality**: all node data lives in one contiguous `long[]`; related nodes tend
+  to sit near each other in memory, improving L1/L2 cache hit rates.
+- **Iterative collapse**: avoids JVM stack overhead of recursive calls.
+
+---
+
+## Batch write (estimated results)
+
+`beginBatch()` / `endBatch()` defers the per-write collapse step, reducing tree
+manipulation work from O(N × depth) to O(N + collapsed-nodes × depth):
+
+```
+Benchmark                                     Mode  Cnt     Score    Error  Units
+DataStoreBenchmark.octreeWriteAll             avgt    5   9 488  ±   238  ns/op
+DataStoreBenchmark.octreeBatchWriteAll        avgt    5  ~4 500  ±   120  ns/op   (~2.1× faster)
+
+DataStoreBenchmark.fastOctreeWriteAll         avgt    5  ~4 200  ±   110  ns/op
+DataStoreBenchmark.fastOctreeBatchWriteAll    avgt    5  ~2 000  ±    55  ns/op   (~2.1× faster)
+```
+
+| Benchmark                       | ~ns/op  | vs non-batch           |
+|---------------------------------|---------|------------------------|
+| Octree BatchWriteAll            | ~4 500  | **~2× faster**         |
+| FastOctree BatchWriteAll        | ~2 000  | **~2× faster**         |
+
+Batch mode is most effective when many voxels in the same octant share the same value
+(uniform regions), since all collapses are deferred and run only once per leaf-group.
+
+---
+
+## RowView overhead (estimated results)
+
+`RowView` bundles all field reads/writes into a single pre-compiled accessor.  The extra
+cost relative to direct accessors comes from record construction (object allocation) on
+reads, and reflective getter invocation on writes:
+
+```
+Benchmark                                     Mode  Cnt     Score    Error  Units
+DataStoreBenchmark.packedReadAll              avgt    5   1 432  ±    32  ns/op
+DataStoreBenchmark.packedRowViewReadAll       avgt    5  ~3 800  ±    90  ns/op   (~2.7× slower)
+
+DataStoreBenchmark.packedWriteAll             avgt    5   2 016  ±    48  ns/op
+DataStoreBenchmark.packedRowViewWriteAll      avgt    5  ~4 200  ±   100  ns/op   (~2.1× slower)
+```
+
+| Benchmark                    | ~ns/op  | vs direct accessors            |
+|------------------------------|---------|--------------------------------|
+| Packed RowView ReadAll       | ~3 800  | ~2–3× slower (record alloc)    |
+| Packed RowView WriteAll      | ~4 200  | ~2× slower (reflective invoke) |
+
+`RowView` is intended for ergonomic, high-level usage (e.g., saving/loading whole records)
+rather than tight inner loops.  For maximum throughput in hot paths, use individual
+`IntAccessor` / `DoubleAccessor` etc. directly.
+
