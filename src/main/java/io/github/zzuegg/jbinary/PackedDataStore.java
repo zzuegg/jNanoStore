@@ -19,7 +19,7 @@ import java.util.*;
  *
  * <p>Use {@link DataStore#packed} or {@link DataStore#of} to create instances.</p>
  */
-public final class PackedDataStore implements DataStore {
+public final class PackedDataStore<T> implements DataStore<T> {
 
     private final long[] data;
     private final int capacity;
@@ -30,7 +30,8 @@ public final class PackedDataStore implements DataStore {
 
     // -----------------------------------------------------------------------
 
-    static DataStore create(int capacity, Class<?>... componentClasses) {
+    @SuppressWarnings("unchecked")
+    static <T> DataStore<T> create(int capacity, Class<?>... componentClasses) {
         if (componentClasses == null || componentClasses.length == 0) {
             throw new IllegalArgumentException("At least one component class is required");
         }
@@ -50,7 +51,7 @@ public final class PackedDataStore implements DataStore {
         int rowStrideLongs = (rowBits + 63) / 64;
         if (rowStrideLongs == 0) rowStrideLongs = 1;
 
-        return new PackedDataStore(capacity, rowStrideLongs,
+        return new PackedDataStore<>(capacity, rowStrideLongs,
                 Collections.unmodifiableMap(offsets));
     }
 

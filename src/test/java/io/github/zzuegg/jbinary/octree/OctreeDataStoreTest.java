@@ -615,4 +615,54 @@ class OctreeDataStoreTest {
         assertTrue(CollapsingFunction.bitsEqual(null, zero, 0, 64));
         assertTrue(CollapsingFunction.bitsEqual(zero, null, 0, 64));
     }
+
+    // -----------------------------------------------------------------------
+    // Non-uniform builder: builder(widthX, widthY, widthZ)
+
+    @Test
+    void nonUniformBuilderExposesCorrectDimensions() {
+        OctreeDataStore<?> store = OctreeDataStore.builder(100, 100, 10)
+                .component(Voxel.class)
+                .build();
+        assertEquals(100, store.widthX());
+        assertEquals(100, store.widthY());
+        assertEquals(10,  store.widthZ());
+        assertEquals(100 * 100 * 10, store.capacity());
+    }
+
+    @Test
+    void nonUniformBuilderRoundTrip() {
+        OctreeDataStore<?> store = OctreeDataStore.builder(100, 100, 10)
+                .component(Voxel.class, CollapsingFunction.never())
+                .build();
+        IntAccessor mat = Accessors.intFieldInStore(store, Voxel.class, "material");
+
+        // Write at valid corners of the non-uniform space
+        mat.set(store, store.row(0,   0,  0), 1);
+        mat.set(store, store.row(99, 99,  9), 2);
+        mat.set(store, store.row(50, 50,  5), 3);
+
+        assertEquals(1, mat.get(store, store.row(0,   0,  0)));
+        assertEquals(2, mat.get(store, store.row(99, 99,  9)));
+        assertEquals(3, mat.get(store, store.row(50, 50,  5)));
+    }
+
+    @Test
+    void nonUniformBuilderRejectsOutOfBoundsZ() {
+        OctreeDataStore<?> store = OctreeDataStore.builder(100, 100, 10)
+                .component(Voxel.class)
+                .build();
+        assertThrows(IllegalArgumentException.class, () -> store.row(0, 0, 10));
+        assertThrows(IllegalArgumentException.class, () -> store.row(0, 0, -1));
+    }
+
+    @Test
+    void nonUniformBuilderRejectsZeroDimension() {
+        assertThrows(IllegalArgumentException.class,
+                () -> OctreeDataStore.builder(0, 100, 10));
+        assertThrows(IllegalArgumentException.class,
+                () -> OctreeDataStore.builder(100, 0, 10));
+        assertThrows(IllegalArgumentException.class,
+                () -> OctreeDataStore.builder(100, 100, 0));
+    }
 }

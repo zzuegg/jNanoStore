@@ -457,8 +457,57 @@ class FastOctreeDataStoreTest {
 
     @Test
     void depth1OctreeHasCapacity8() {
-        FastOctreeDataStore store = FastOctreeDataStore.builder(1).component(Voxel.class).build();
+        FastOctreeDataStore<?> store = FastOctreeDataStore.builder(1).component(Voxel.class).build();
         assertEquals(8, store.capacity());
         assertEquals(2, store.sideLength());
+    }
+
+    // -----------------------------------------------------------------------
+    // Non-uniform builder: builder(widthX, widthY, widthZ)
+
+    @Test
+    void nonUniformBuilderExposesCorrectDimensions() {
+        FastOctreeDataStore<?> store = FastOctreeDataStore.builder(100, 100, 10)
+                .component(Voxel.class)
+                .build();
+        assertEquals(100, store.widthX());
+        assertEquals(100, store.widthY());
+        assertEquals(10,  store.widthZ());
+        assertEquals(100 * 100 * 10, store.capacity());
+    }
+
+    @Test
+    void nonUniformBuilderRoundTrip() {
+        FastOctreeDataStore<?> store = FastOctreeDataStore.builder(100, 100, 10)
+                .component(Voxel.class, CollapsingFunction.never())
+                .build();
+        IntAccessor mat = Accessors.intFieldInStore(store, Voxel.class, "material");
+
+        mat.set(store, store.row(0,  0,  0), 1);
+        mat.set(store, store.row(99, 99, 9), 2);
+        mat.set(store, store.row(50, 50, 5), 3);
+
+        assertEquals(1, mat.get(store, store.row(0,  0,  0)));
+        assertEquals(2, mat.get(store, store.row(99, 99, 9)));
+        assertEquals(3, mat.get(store, store.row(50, 50, 5)));
+    }
+
+    @Test
+    void nonUniformBuilderRejectsOutOfBoundsZ() {
+        FastOctreeDataStore<?> store = FastOctreeDataStore.builder(100, 100, 10)
+                .component(Voxel.class)
+                .build();
+        assertThrows(IllegalArgumentException.class, () -> store.row(0, 0, 10));
+        assertThrows(IllegalArgumentException.class, () -> store.row(0, 0, -1));
+    }
+
+    @Test
+    void nonUniformBuilderRejectsZeroDimension() {
+        assertThrows(IllegalArgumentException.class,
+                () -> FastOctreeDataStore.builder(0, 100, 10));
+        assertThrows(IllegalArgumentException.class,
+                () -> FastOctreeDataStore.builder(100, 0, 10));
+        assertThrows(IllegalArgumentException.class,
+                () -> FastOctreeDataStore.builder(100, 100, 0));
     }
 }
