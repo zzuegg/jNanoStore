@@ -237,11 +237,14 @@ public final class FastOctreeDataStore<T> implements DataStore<T> {
 
     @Override
     public long readBits(int row, int bitOffset, int bitWidth) {
-        long morton = (long) row;
-        int x = unspread3(morton);
-        int y = unspread3(morton >>> 1);
-        int z = unspread3(morton >>> 2);
-        return readBitsAt(x, y, z, bitOffset, bitWidth);
+        long morton = (long) row;   // row IS the 30-bit Morton code; always non-negative
+        for (int level = maxDepth, shift = 0; level >= 0; level--, shift += 3) {
+            int s = hashGet(((long) level << 30) | (morton >>> shift));
+            if (s != NO_SLOT) {
+                return readBitsFromArena(s, bitOffset, bitWidth);
+            }
+        }
+        return 0L;
     }
 
     @Override
@@ -259,13 +262,15 @@ public final class FastOctreeDataStore<T> implements DataStore<T> {
     /**
      * Reads {@code bitWidth} bits for the voxel at {@code (x, y, z)}.
      * Searches from leaf level upward; returns 0 if no node found.
+     *
+     * <p>Computes the full-resolution Morton code once, then shifts it right by 3 bits
+     * per level-up, exploiting the identity
+     * {@code morton3D(x>>>k, y>>>k, z>>>k) == morton3D(x,y,z) >>> (3*k)}.
      */
     public long readBitsAt(int x, int y, int z, int bitOffset, int bitWidth) {
-        for (int level = maxDepth; level >= 0; level--) {
-            int s = hashGet(nodeId(level,
-                                   x >>> (maxDepth - level),
-                                   y >>> (maxDepth - level),
-                                   z >>> (maxDepth - level)));
+        long morton = morton3D(x, y, z);
+        for (int level = maxDepth, shift = 0; level >= 0; level--, shift += 3) {
+            int s = hashGet(((long) level << 30) | (morton >>> shift));
             if (s != NO_SLOT) {
                 return readBitsFromArena(s, bitOffset, bitWidth);
             }
