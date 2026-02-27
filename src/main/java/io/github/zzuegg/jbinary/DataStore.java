@@ -1,5 +1,9 @@
 package io.github.zzuegg.jbinary;
 
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
+
 /**
  * Base interface for a bit-packed datastore.
  *
@@ -44,6 +48,31 @@ public interface DataStore {
      * starting at {@code bitOffset} within the row.
      */
     void writeBits(int row, int bitOffset, int bitWidth, long value);
+
+    /**
+     * Serializes the raw bit data of this store to the given stream.
+     *
+     * <p>The output stream is <em>not</em> closed by this method.  The binary format is
+     * self-describing (magic bytes, type tag, capacity, rowStride, then the raw longs) and
+     * is compatible with {@link #read(InputStream)}.
+     *
+     * @param out  destination stream; must not be {@code null}
+     * @throws IOException if an I/O error occurs during writing
+     */
+    void write(OutputStream out) throws IOException;
+
+    /**
+     * Loads raw bit data from the given stream into this store, replacing its current contents.
+     *
+     * <p>The stream must have been written by {@link #write(OutputStream)} of a store of the
+     * <em>same type</em>, with the same {@link #capacity()} and {@link #rowStrideLongs()}.
+     * The input stream is <em>not</em> closed by this method.
+     *
+     * @param in  source stream; must not be {@code null}
+     * @throws IOException              if an I/O error occurs during reading
+     * @throws IllegalArgumentException if the stream metadata does not match this store
+     */
+    void read(InputStream in) throws IOException;
 
     // -----------------------------------------------------------------------
     // Static factories

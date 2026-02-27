@@ -3,6 +3,11 @@ package io.github.zzuegg.jbinary;
 import io.github.zzuegg.jbinary.schema.ComponentLayout;
 import io.github.zzuegg.jbinary.schema.LayoutBuilder;
 
+import java.io.DataInputStream;
+import java.io.DataOutputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
 import java.util.*;
 
 /**
@@ -121,5 +126,44 @@ public final class PackedDataStore implements DataStore {
         if (off == null) throw new IllegalArgumentException(
                 "Component " + cls.getSimpleName() + " not registered in this DataStore");
         return off;
+    }
+
+    // -----------------------------------------------------------------------
+    // Serialization (type tag = 0)
+
+    static final int MAGIC = 0x4A42494E; // "JBIN"
+    static final byte TYPE_PACKED = 0;
+
+    @Override
+    public void write(OutputStream out) throws IOException {
+        DataOutputStream dos = new DataOutputStream(out);
+        dos.writeInt(MAGIC);
+        dos.writeByte(TYPE_PACKED);
+        dos.writeInt(capacity);
+        dos.writeInt(rowStrideLongs);
+        for (long word : data) {
+            dos.writeLong(word);
+        }
+        dos.flush();
+    }
+
+    @Override
+    public void read(InputStream in) throws IOException {
+        DataInputStream dis = new DataInputStream(in);
+        int magic = dis.readInt();
+        if (magic != MAGIC) throw new IOException(
+                "Invalid magic bytes: expected 0x" + Integer.toHexString(MAGIC));
+        int type = dis.readByte();
+        if (type != TYPE_PACKED) throw new IOException(
+                "Expected packed store (type 0), got type " + type);
+        int cap    = dis.readInt();
+        int stride = dis.readInt();
+        if (cap != capacity || stride != rowStrideLongs) throw new IllegalArgumentException(
+                "Store metadata mismatch: stream has capacity=" + cap +
+                " rowStride=" + stride + " but store has capacity=" + capacity +
+                " rowStride=" + rowStrideLongs);
+        for (int i = 0; i < data.length; i++) {
+            data[i] = dis.readLong();
+        }
     }
 }

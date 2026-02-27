@@ -4,6 +4,11 @@ import io.github.zzuegg.jbinary.DataStore;
 import io.github.zzuegg.jbinary.schema.ComponentLayout;
 import io.github.zzuegg.jbinary.schema.LayoutBuilder;
 
+import java.io.DataInputStream;
+import java.io.DataOutputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
 import java.util.*;
 
 /**
@@ -290,6 +295,56 @@ public final class OctreeDataStore implements DataStore {
      * interior nodes).  Useful for monitoring compression effectiveness.
      */
     public int nodeCount() { return nodes.size(); }
+
+    // -----------------------------------------------------------------------
+    // Serialization (type tag = 2)
+
+    private static final int  MAGIC       = 0x4A42494E; // "JBIN"
+    private static final byte TYPE_OCTREE = 2;
+
+    @Override
+    public void write(OutputStream out) throws IOException {
+        DataOutputStream dos = new DataOutputStream(out);
+        dos.writeInt(MAGIC);
+        dos.writeByte(TYPE_OCTREE);
+        dos.writeInt(maxDepth);
+        dos.writeInt(rowStrideLongs);
+        dos.writeInt(nodes.size());
+        for (Map.Entry<Long, long[]> entry : nodes.entrySet()) {
+            dos.writeLong(entry.getKey());
+            for (long word : entry.getValue()) {
+                dos.writeLong(word);
+            }
+        }
+        dos.flush();
+    }
+
+    @Override
+    public void read(InputStream in) throws IOException {
+        DataInputStream dis = new DataInputStream(in);
+        int magic = dis.readInt();
+        if (magic != MAGIC) throw new IOException(
+                "Invalid magic bytes: expected 0x" + Integer.toHexString(MAGIC));
+        int type = dis.readByte();
+        if (type != TYPE_OCTREE) throw new IOException(
+                "Expected octree store (type 2), got type " + type);
+        int depth  = dis.readInt();
+        int stride = dis.readInt();
+        if (depth != maxDepth || stride != rowStrideLongs) throw new IllegalArgumentException(
+                "Store metadata mismatch: stream has maxDepth=" + depth +
+                " rowStride=" + stride + " but store has maxDepth=" + maxDepth +
+                " rowStride=" + rowStrideLongs);
+        nodes.clear();
+        int nodeCount = dis.readInt();
+        for (int i = 0; i < nodeCount; i++) {
+            long nodeId = dis.readLong();
+            long[] data = new long[rowStrideLongs];
+            for (int j = 0; j < rowStrideLongs; j++) {
+                data[j] = dis.readLong();
+            }
+            nodes.put(nodeId, data);
+        }
+    }
 
     // -----------------------------------------------------------------------
     // Ancestor expansion

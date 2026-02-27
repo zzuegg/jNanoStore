@@ -3,6 +3,11 @@ package io.github.zzuegg.jbinary;
 import io.github.zzuegg.jbinary.schema.ComponentLayout;
 import io.github.zzuegg.jbinary.schema.LayoutBuilder;
 
+import java.io.DataInputStream;
+import java.io.DataOutputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
 import java.util.*;
 
 /**
@@ -135,5 +140,55 @@ public final class SparseDataStore implements DataStore {
     /** Returns the number of rows that have been allocated (written at least once). */
     public int allocatedRowCount() {
         return rows.size();
+    }
+
+    // -----------------------------------------------------------------------
+    // Serialization (type tag = 1)
+
+    private static final int  MAGIC       = 0x4A42494E; // "JBIN"
+    private static final byte TYPE_SPARSE = 1;
+
+    @Override
+    public void write(OutputStream out) throws IOException {
+        DataOutputStream dos = new DataOutputStream(out);
+        dos.writeInt(MAGIC);
+        dos.writeByte(TYPE_SPARSE);
+        dos.writeInt(capacity);
+        dos.writeInt(rowStrideLongs);
+        dos.writeInt(rows.size());
+        for (Map.Entry<Integer, long[]> entry : rows.entrySet()) {
+            dos.writeInt(entry.getKey());
+            for (long word : entry.getValue()) {
+                dos.writeLong(word);
+            }
+        }
+        dos.flush();
+    }
+
+    @Override
+    public void read(InputStream in) throws IOException {
+        DataInputStream dis = new DataInputStream(in);
+        int magic = dis.readInt();
+        if (magic != MAGIC) throw new IOException(
+                "Invalid magic bytes: expected 0x" + Integer.toHexString(MAGIC));
+        int type = dis.readByte();
+        if (type != TYPE_SPARSE) throw new IOException(
+                "Expected sparse store (type 1), got type " + type);
+        int cap    = dis.readInt();
+        int stride = dis.readInt();
+        if (cap != capacity || stride != rowStrideLongs) throw new IllegalArgumentException(
+                "Store metadata mismatch: stream has capacity=" + cap +
+                " rowStride=" + stride + " but store has capacity=" + capacity +
+                " rowStride=" + rowStrideLongs);
+        rows.clear();
+        int rowCount = dis.readInt();
+        for (int i = 0; i < rowCount; i++) {
+            int rowIndex = dis.readInt();
+            long[] rowData = new long[rowStrideLongs];
+            for (int j = 0; j < rowStrideLongs; j++) {
+                rowData[j] = dis.readLong();
+            }
+            rows.put(rowIndex, rowData);
+        }
     }
 }
