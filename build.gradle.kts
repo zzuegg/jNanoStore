@@ -51,6 +51,13 @@ tasks.register<JavaExec>("jmhRun") {
     args("-wi", "3", "-i", "5", "-f", "1", "-bm", "avgt", "-tu", "ns")
 }
 
+// Lightweight JMH run for CI: single warmup, single measurement, single fork
+tasks.register<JavaExec>("jmhCi") {
+    classpath = sourceSets["jmh"].runtimeClasspath
+    mainClass.set("org.openjdk.jmh.Main")
+    args("-wi", "1", "-i", "1", "-f", "1", "-bm", "avgt", "-tu", "ns")
+}
+
 publishing {
     publications {
         create<MavenPublication>("mavenJava") {
