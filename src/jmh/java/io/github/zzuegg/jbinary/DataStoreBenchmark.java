@@ -46,6 +46,7 @@ public class DataStoreBenchmark {
     BoolAccessor   packedActiveAcc;
     RowView<Terrain> packedRowView;
     DataCursor<TerrainCursor> packedCursor;
+    DataCursor<TerrainCursor> packedCursorVH;   // VarHandle fallback (no ByteBuddy)
 
     // ------------------------------------------------------------------ sparse store
     DataStore sparseStore;
@@ -54,6 +55,7 @@ public class DataStoreBenchmark {
     BoolAccessor   sparseActiveAcc;
     RowView<Terrain> sparseRowView;
     DataCursor<TerrainCursor> sparseCursor;
+    DataCursor<TerrainCursor> sparseCursorVH;   // VarHandle fallback (no ByteBuddy)
 
     // ------------------------------------------------------------------ octree store (maxDepth=4 → 16×16×16; first N voxels)
     OctreeDataStore octreeStore;
@@ -99,6 +101,7 @@ public class DataStoreBenchmark {
         packedActiveAcc = Accessors.boolFieldInStore(packedStore, Terrain.class, "active");
         packedRowView   = RowView.of(packedStore, Terrain.class);
         packedCursor    = DataCursor.of(packedStore, TerrainCursor.class);
+        packedCursorVH  = DataCursor.ofVarHandle(packedStore, TerrainCursor.class);
 
         // sparse store
         sparseStore     = DataStore.sparse(N, Terrain.class);
@@ -107,6 +110,7 @@ public class DataStoreBenchmark {
         sparseActiveAcc = Accessors.boolFieldInStore(sparseStore, Terrain.class, "active");
         sparseRowView   = RowView.of(sparseStore, Terrain.class);
         sparseCursor    = DataCursor.of(sparseStore, TerrainCursor.class);
+        sparseCursorVH  = DataCursor.ofVarHandle(sparseStore, TerrainCursor.class);
 
         // octree store (maxDepth=4 → 16×16×16 space; first N Morton-coded rows)
         octreeStore = OctreeDataStore.builder(4)
@@ -474,6 +478,80 @@ public class DataStoreBenchmark {
                 d.height = i % 256; d.temperature = (i % 100) - 50.0; d.active = (i & 1) == 0;
                 sparseCursor.flush(sparseStore, idx);
             }
+        }
+    }
+
+    // ====================================================================
+    // PACKED — DataCursor VarHandle (no ByteBuddy; baseline comparison)
+    // ====================================================================
+
+    @Benchmark public void packedCursorVhReadAll(Blackhole bh) {
+        for (int i = 0; i < N; i++) {
+            TerrainCursor d = packedCursorVH.update(packedStore, i);
+            bh.consume(d.height); bh.consume(d.temperature); bh.consume(d.active);
+        }
+    }
+
+    @Benchmark public void packedCursorVhWriteAll() {
+        TerrainCursor d = packedCursorVH.get();
+        for (int i = 0; i < N; i++) {
+            d.height = i % 256; d.temperature = (i % 100) - 50.0; d.active = (i & 1) == 0;
+            packedCursorVH.flush(packedStore, i);
+        }
+    }
+
+    @Benchmark public void packedCursorVhRandomRead(Blackhole bh) {
+        for (int i = 0; i < N; i++) {
+            TerrainCursor d = packedCursorVH.update(packedStore, randIdx[i]);
+            bh.consume(d.height); bh.consume(d.temperature); bh.consume(d.active);
+        }
+    }
+
+    @Benchmark public void packedCursorVhRandomWrite() {
+        TerrainCursor d = packedCursorVH.get();
+        for (int i = 0; i < N; i++) {
+            int idx = randIdx[i];
+            d.height = i % 256; d.temperature = (i % 100) - 50.0; d.active = (i & 1) == 0;
+            packedCursorVH.flush(packedStore, idx);
+        }
+    }
+
+    @Benchmark public int packedCursorVhReadSingle() {
+        return packedCursorVH.update(packedStore, N / 2).height;
+    }
+
+    // ====================================================================
+    // SPARSE — DataCursor VarHandle (no ByteBuddy; baseline comparison)
+    // ====================================================================
+
+    @Benchmark public void sparseCursorVhReadAll(Blackhole bh) {
+        for (int i = 0; i < N; i++) {
+            TerrainCursor d = sparseCursorVH.update(sparseStore, i);
+            bh.consume(d.height); bh.consume(d.temperature); bh.consume(d.active);
+        }
+    }
+
+    @Benchmark public void sparseCursorVhWriteAll() {
+        TerrainCursor d = sparseCursorVH.get();
+        for (int i = 0; i < N; i++) {
+            d.height = i % 256; d.temperature = (i % 100) - 50.0; d.active = (i & 1) == 0;
+            sparseCursorVH.flush(sparseStore, i);
+        }
+    }
+
+    @Benchmark public void sparseCursorVhRandomRead(Blackhole bh) {
+        for (int i = 0; i < N; i++) {
+            TerrainCursor d = sparseCursorVH.update(sparseStore, randIdx[i]);
+            bh.consume(d.height); bh.consume(d.temperature); bh.consume(d.active);
+        }
+    }
+
+    @Benchmark public void sparseCursorVhRandomWrite() {
+        TerrainCursor d = sparseCursorVH.get();
+        for (int i = 0; i < N; i++) {
+            int idx = randIdx[i];
+            d.height = i % 256; d.temperature = (i % 100) - 50.0; d.active = (i & 1) == 0;
+            sparseCursorVH.flush(sparseStore, idx);
         }
     }
 

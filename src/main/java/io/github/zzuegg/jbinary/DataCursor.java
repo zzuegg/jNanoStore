@@ -132,10 +132,43 @@ public final class DataCursor<T> {
      * @param store the DataStore the cursor will read from / write to
      * @param cls   the cursor class
      * @param <T>   cursor type
-     * @return a fully pre-compiled {@code DataCursor}
+     * @return a fully pre-compiled {@code DataCursor} (uses ByteBuddy direct-field codec when available)
      * @throws IllegalArgumentException if any {@link StoreField} mapping is invalid
      */
     public static <T> DataCursor<T> of(DataStore<?> store, Class<T> cls) {
+        BuildResult<T> r = prepareSpecs(store, cls);
+        CursorCodec codec = CursorCodecGenerator.build(cls, r.specs, r.lookup);
+        return new DataCursor<>(r.instance, codec);
+    }
+
+    /**
+     * Creates a {@code DataCursor} for class {@code T} that uses {@link VarHandle}-based field
+     * access only, bypassing ByteBuddy code generation.
+     *
+     * <p>Useful for benchmarking to compare the overhead of the VarHandle fallback path against
+     * the ByteBuddy-generated codec produced by {@link #of(DataStore, Class)}.
+     *
+     * @param store the DataStore the cursor will read from / write to
+     * @param cls   the cursor class
+     * @param <T>   cursor type
+     * @return a VarHandle-based {@code DataCursor}
+     * @throws IllegalArgumentException if any {@link StoreField} mapping is invalid
+     */
+    public static <T> DataCursor<T> ofVarHandle(DataStore<?> store, Class<T> cls) {
+        BuildResult<T> r = prepareSpecs(store, cls);
+        CursorCodec codec = CursorCodecGenerator.buildVarHandleFallback(r.specs);
+        return new DataCursor<>(r.instance, codec);
+    }
+
+    // -----------------------------------------------------------------------
+    // Internal helpers
+
+    /** Transient holder returned by {@link #prepareSpecs}. */
+    private record BuildResult<T>(T instance,
+                                   List<CursorCodecGenerator.FieldSpec> specs,
+                                   MethodHandles.Lookup lookup) {}
+
+    private static <T> BuildResult<T> prepareSpecs(DataStore<?> store, Class<T> cls) {
         Field[] fields = cls.getDeclaredFields();
 
         // Count annotated fields
@@ -194,8 +227,7 @@ public final class DataCursor<T> {
             specs.add(new CursorCodecGenerator.FieldSpec(f, vh, accessor));
         }
 
-        CursorCodec codec = CursorCodecGenerator.build(cls, specs, lookup);
-        return new DataCursor<>(instance, codec);
+        return new BuildResult<>(instance, specs, lookup);
     }
 
     // -----------------------------------------------------------------------

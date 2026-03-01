@@ -127,7 +127,7 @@ final class CursorCodecGenerator {
     // VarHandle fallback
     // -----------------------------------------------------------------------
 
-    private static CursorCodec buildVarHandleFallback(List<FieldSpec> specs) {
+    static CursorCodec buildVarHandleFallback(List<FieldSpec> specs) {
         List<FieldSpec> copy = List.copyOf(specs);
         return new CursorCodec() {
             @Override
