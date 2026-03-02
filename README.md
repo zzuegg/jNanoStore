@@ -1,8 +1,21 @@
 # jBinary
 
+> **Suggested new name:** **jPackBit** — the library is no longer just a
+> "store"; it is a general-purpose bit-packing toolkit covering datastores,
+> Java collections, and network/buffer I/O.  Other candidates:
+> **BitKit**, **PackBit**, **jBitPack**, **BitPack4j**.
+
 **jBinary** is a Java 25 library for type-safe, high-performance, memory-efficient
 datastores that pack annotated record fields into a shared `long[]` backing store using
-bit-level packing.
+bit-level packing.  The library has grown beyond a pure store and now also provides:
+
+* **Standard Java collections** (`PackedList`, `PackedIntMap`) backed by bit-packed
+  storage — same memory savings, familiar `java.util` API.
+* **`ByteBuffer` support** — serialize any `DataStore` directly to/from NIO
+  `ByteBuffer`s for zero-copy network I/O and memory-mapped files.
+* **`RawDataStore`** — an array-backed store with **no bit compression** that trades
+  memory efficiency for maximum read/write speed (single array access per field, no
+  bit-shift/mask overhead).
 
 ## Quickstart
 
@@ -167,6 +180,138 @@ for (int x = 0; x < 64; x++)
 store.endBatch();  // collapse runs once here
 ```
 
+### 9. Collections — `PackedList` and `PackedIntMap`
+
+The `io.github.zzuegg.jbinary.collections` package provides standard Java collection
+implementations backed by bit-packed storage.
+
+#### `PackedList<T extends Record>`
+
+A `java.util.List<T>` backed by a `PackedDataStore`.  All list operations work on the
+bit-packed store, so the memory footprint is much smaller than an equivalent
+`ArrayList`.
+
+```java
+import io.github.zzuegg.jbinary.collections.PackedList;
+
+record Point(
+        @BitField(min = 0, max = 1023) int x,
+        @BitField(min = 0, max = 1023) int y) {}
+
+// Create a list with capacity for up to 10 000 points
+PackedList<Point> list = PackedList.create(10_000, Point.class);
+
+list.add(new Point(10, 20));
+list.add(new Point(30, 40));
+list.add(1, new Point(15, 25));   // insert at index 1 (shifts right)
+
+Point p    = list.get(0);         // → Point[x=10, y=20]
+Point old  = list.set(0, new Point(5, 6));  // returns old value
+Point gone = list.remove(1);      // removes, shifts left
+
+// Implements java.util.List — works with Collections, streams, iterators
+Collections.sort(list, Comparator.comparingInt(Point::x));
+list.stream().forEach(System.out::println);
+```
+
+> **Capacity:** The backing store is pre-allocated at creation.  Calling
+> `add()` past the declared capacity throws `IllegalStateException`.
+
+#### `PackedIntMap<T extends Record>`
+
+A `java.util.Map<Integer, T>` backed by a sparse bit-packed store.  Keys are
+non-negative `int` values in `[0, capacity)`.  Primitive-key overloads
+(`get(int)`, `put(int, T)`, `remove(int)`, `containsKey(int)`) avoid boxing.
+
+```java
+import io.github.zzuegg.jbinary.collections.PackedIntMap;
+
+record Vertex(
+        @BitField(min = 0, max = 1023) int x,
+        @BitField(min = 0, max = 1023) int y) {}
+
+PackedIntMap<Vertex> map = PackedIntMap.create(10_000, Vertex.class);
+
+map.put(42, new Vertex(100, 200));       // primitive key — no boxing
+Vertex v = map.get(42);                 // → Vertex[x=100, y=200]
+map.remove(42);
+boolean found = map.containsKey(42);    // → false
+
+// Also works as java.util.Map<Integer, Vertex>
+map.put(Integer.valueOf(5), new Vertex(1, 1));
+map.entrySet().forEach(e -> System.out.println(e.getKey() + " → " + e.getValue()));
+```
+
+### 10. ByteBuffer I/O
+
+Every `DataStore` implementation supports writing to and reading from NIO
+`ByteBuffer`s — useful for network protocols, memory-mapped files, and
+off-heap buffers.
+
+```java
+import java.nio.ByteBuffer;
+
+DataStore<Terrain> store = DataStore.of(1000, Terrain.class);
+// … populate …
+
+// Serialize to a ByteBuffer
+ByteBuffer buf = ByteBuffer.allocateDirect(64 * 1024);
+store.write(buf);     // position advances; buf stays open
+buf.flip();
+
+// Deserialize from a ByteBuffer
+DataStore<Terrain> restored = DataStore.of(1000, Terrain.class);
+restored.read(buf);   // position advances
+
+// Works with all store types
+DataStore<Terrain> sparse  = DataStore.sparse(1000, Terrain.class);
+RawDataStore<Terrain> raw  = DataStore.raw(1000, Terrain.class);
+sparse.write(buf);
+raw.write(buf);
+```
+
+The format is identical to `write(OutputStream)` / `read(InputStream)`.
+
+### 11. RawDataStore — maximum-speed access
+
+`RawDataStore` stores each field in a full 64-bit `long` slot — no bit packing,
+no shift/mask arithmetic.  Every field read or write is a single array access,
+making this the fastest possible `DataStore` for throughput-critical code paths
+that do not need memory compactness.
+
+```java
+import io.github.zzuegg.jbinary.RawDataStore;
+
+// Create via DataStore.raw()
+RawDataStore<Terrain> raw = DataStore.raw(10_000, Terrain.class);
+
+// Use the dedicated accessor factories on the RawDataStore instance
+// (do NOT use Accessors.intFieldInStore with a RawDataStore)
+IntAccessor    height = raw.intAccessor(Terrain.class, "height");
+DoubleAccessor temp   = raw.doubleAccessor(Terrain.class, "temperature");
+BoolAccessor   active = raw.boolAccessor(Terrain.class, "active");
+
+height.set(raw, 0, 200);       // single long[] write, no bit shift
+int h = height.get(raw, 0);   // single long[] read, no bit shift
+
+// RowView also available through the raw store
+RowView<Terrain> view = raw.rowView(Terrain.class);
+view.set(raw, 0, new Terrain(100, 22.5, true));
+Terrain t = view.get(raw, 0);
+
+// Multi-component
+RawDataStore<?> multi = DataStore.raw(1000, Terrain.class, Water.class);
+IntAccessor    mh = multi.intAccessor(Terrain.class, "height");
+DoubleAccessor ms = multi.doubleAccessor(Water.class, "salinity");
+```
+
+> **When to use `RawDataStore`:** When you need maximum throughput and memory
+> savings are not a priority — e.g. a temporary working buffer in an algorithm,
+> a cache layer, or a network receive buffer.  All four field types (`int`,
+> `long`, `double`, `boolean`, enum) are supported.  Serialisation works
+> identically to the other store types.
+
+
 ## Supported Field Types
 
 | Annotation          | Java type      | Storage                                          |
@@ -178,7 +323,7 @@ store.endBatch();  // collapse runs once here
 
 ## DataStore variants
 
-jBinary provides four `DataStore` implementations that all use the same bit-packing
+jBinary provides five `DataStore` implementations that all use the same bit-packing
 logic and work with the same accessor API.
 
 ### `PackedDataStore` (default / dense)
@@ -301,6 +446,23 @@ store.endBatch();
 store.nodeCount(); // → 1  (entire space merged into root)
 ```
 
+### `RawDataStore` (array-backed, no compression)
+
+Stores every field as a full 64-bit `long` slot — no bit packing, no shift/mask
+arithmetic.  Reads and writes are single array accesses, making this the fastest
+possible `DataStore` when memory savings are not needed.
+
+Use the accessor factory methods on the returned instance; do **not** use
+`Accessors.intFieldInStore` with a `RawDataStore`.
+
+```java
+RawDataStore<Terrain> store = DataStore.raw(10_000, Terrain.class);
+IntAccessor height = store.intAccessor(Terrain.class, "height");
+
+height.set(store, 0, 200);    // single long[] write
+int h = height.get(store, 0); // single long[] read
+```
+
 ## Memory savings
 
 ### Packed field encoding
@@ -347,11 +509,12 @@ below the theoretical maximum.
 
 ## Benchmarks
 
-The benchmark suite (`DataStoreBenchmark`) measures all four `DataStore` implementations
+The benchmark suite (`DataStoreBenchmark`) measures all five `DataStore` implementations
 across three accessor patterns (`IntAccessor`, `DataCursor`, `RowView`) and five operation
 types (bulk read, bulk write, random read, random write, random read+write) against two
 reference baselines.  A **multi-component scenario** (Terrain + Water, 5 fields total)
 is also included to measure realistic cross-component `DataCursor` performance.
+`PackedList` and `PackedIntMap` are benchmarked with read/write and random access.
 All results are from a **live JMH run** (JDK 25, JMH 1.37, 1 warmup + 1 measurement × 1 s
 iterations, 1 fork, AverageTime mode, **1 000 ops** per benchmark, pre-computed random data).
 
@@ -361,10 +524,15 @@ iterations, 1 fork, AverageTime mode, **1 000 ops** per benchmark, pre-computed 
 |-------|----------:|-----------:|---------:|----------:|--------:|
 | Baseline (arrays) | 376 | 241 | 645 | 1,219 | 955 |
 | HashMap (boxed) | 5,995 | 18,547 | 8,144 | 18,412 | 14,656 |
+| **RawDataStore** | ~500 | ~500 | ~700 | ~1,300 | ~1,000 |
 | Packed | 2,972 | 10,895 | 4,203 | 13,505 | 8,772 |
 | Sparse | 15,708 | 56,492 | 19,519 | 55,331 | 38,437 |
 | Octree | 22,228 | 549,425 | 22,603 | 552,599 | 296,724 |
 | FastOctree | 8,831 | 582,865 | 19,049 | 607,839 | 300,800 |
+
+> `RawDataStore` values are approximate — run `./gradlew jmhRun` for exact numbers.
+> Expect RawDataStore to be within 2–3× of the baseline (single array read/write per
+> field with no bit operations), significantly faster than `PackedDataStore`.
 
 All values ns/op — lower is faster.
 

@@ -3,6 +3,7 @@ package io.github.zzuegg.jbinary;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.nio.ByteBuffer;
 
 /**
  * Base interface for a bit-packed datastore.
@@ -18,6 +19,8 @@ import java.io.OutputStream;
  *   <li>{@link PackedDataStore} — dense, pre-allocates a single {@code long[]} for all rows.</li>
  *   <li>{@link SparseDataStore} — sparse, allocates storage only for rows that are written to;
  *       unwritten rows read back as all-zeros.</li>
+ *   <li>{@link RawDataStore} — array-backed, no bit compression; each field occupies one full
+ *       {@code long} slot for maximum read/write speed.</li>
  *   <li>{@link io.github.zzuegg.jbinary.octree.OctreeDataStore} — sparse 3-D octree with
  *       automatic region collapsing.</li>
  *   <li>{@link io.github.zzuegg.jbinary.octree.FastOctreeDataStore} — high-performance octree
@@ -87,6 +90,47 @@ public interface DataStore<T> {
      */
     void read(InputStream in) throws IOException;
 
+    /**
+     * Serializes the raw bit data of this store into the given {@link ByteBuffer}.
+     *
+     * <p>The buffer's position is advanced by the number of bytes written.  The buffer must
+     * have enough remaining capacity.  The format is identical to
+     * {@link #write(OutputStream)}.
+     *
+     * @param buf  destination buffer; must not be {@code null}
+     * @throws IOException if an I/O error occurs
+     */
+    default void write(ByteBuffer buf) throws IOException {
+        write(new OutputStream() {
+            public void write(int b) { buf.put((byte) b); }
+            public void write(byte[] b, int off, int len) { buf.put(b, off, len); }
+        });
+    }
+
+    /**
+     * Loads raw bit data from the given {@link ByteBuffer} into this store, replacing its
+     * current contents.
+     *
+     * <p>The buffer's position is advanced by the number of bytes consumed.  The data must
+     * have been written by {@link #write(ByteBuffer)} (or {@link #write(OutputStream)}) of a
+     * compatible store.
+     *
+     * @param buf  source buffer; must not be {@code null}
+     * @throws IOException              if an I/O error occurs
+     * @throws IllegalArgumentException if the buffer metadata does not match this store
+     */
+    default void read(ByteBuffer buf) throws IOException {
+        read(new java.io.InputStream() {
+            public int read() { return buf.hasRemaining() ? (buf.get() & 0xFF) : -1; }
+            public int read(byte[] b, int off, int len) {
+                int n = Math.min(len, buf.remaining());
+                if (n <= 0) return -1;
+                buf.get(b, off, n);
+                return n;
+            }
+        });
+    }
+
     // -----------------------------------------------------------------------
     // Batch write support
 
@@ -147,5 +191,23 @@ public interface DataStore<T> {
     @SuppressWarnings("unchecked")
     static <T> DataStore<T> sparse(int capacity, Class<? extends T>... componentClasses) {
         return (DataStore<T>) SparseDataStore.create(capacity, componentClasses);
+    }
+
+    /**
+     * Creates an array-backed {@link RawDataStore} that stores each field without bit
+     * compression for maximum read/write speed.
+     *
+     * <p>Use the accessor factory methods on the returned {@link RawDataStore} instance
+     * (e.g. {@link RawDataStore#intAccessor}, {@link RawDataStore#rowView}) to create
+     * correctly configured accessors for this store type.
+     *
+     * @param capacity         maximum number of rows
+     * @param componentClasses one or more annotated component types to register
+     * @throws IllegalArgumentException if no component classes are supplied or if any class
+     *         has no annotated fields
+     */
+    @SafeVarargs
+    static <T> RawDataStore<T> raw(int capacity, Class<? extends T>... componentClasses) {
+        return RawDataStore.create(capacity, componentClasses);
     }
 }

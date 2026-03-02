@@ -308,6 +308,27 @@ public class DataStoreBenchmark {
         randFastOctreeRows      = shuffledArray(fastOctreeRows, 42L);
         randMultiOctreeRows     = shuffledArray(multiOctreeRows, 42L);
         randMultiFastOctreeRows = shuffledArray(multiFastOctreeRows, 42L);
+
+        // raw store (no bit compression)
+        rawStore     = DataStore.raw(N, Terrain.class);
+        rawHeightAcc = rawStore.intAccessor(Terrain.class, "height");
+        rawTempAcc   = rawStore.doubleAccessor(Terrain.class, "temperature");
+        rawActiveAcc = rawStore.boolAccessor(Terrain.class, "active");
+        rawRowView   = rawStore.rowView(Terrain.class);
+        for (int i = 0; i < N; i++) {
+            rawHeightAcc.set(rawStore, i, testHeight[i]);
+            rawTempAcc.set(rawStore, i, testTemp[i]);
+            rawActiveAcc.set(rawStore, i, testActive[i]);
+        }
+
+        // collections
+        packedList   = io.github.zzuegg.jbinary.collections.PackedList.create(N, Terrain.class);
+        packedIntMap = io.github.zzuegg.jbinary.collections.PackedIntMap.create(N, Terrain.class);
+        for (int i = 0; i < N; i++) {
+            Terrain t = new Terrain(testHeight[i], testTemp[i], testActive[i]);
+            packedList.add(t);
+            packedIntMap.put(i, t);
+        }
     }
 
     // ------------------------------------------------------------------ shuffle helpers
@@ -1345,5 +1366,114 @@ public class DataStoreBenchmark {
                 multiFastOctreeCursor.flush(multiFastOctreeStore, row);
             }
         }
+    }
+
+    // ====================================================================
+    // RAW STORE — array-backed, no bit compression
+    // ====================================================================
+
+    RawDataStore<Terrain> rawStore;
+    IntAccessor    rawHeightAcc;
+    DoubleAccessor rawTempAcc;
+    BoolAccessor   rawActiveAcc;
+    RowView<Terrain> rawRowView;
+
+    @Benchmark public void rawReadAll(Blackhole bh) {
+        for (int i = 0; i < N; i++) {
+            bh.consume(rawHeightAcc.get(rawStore, i));
+            bh.consume(rawTempAcc.get(rawStore, i));
+            bh.consume(rawActiveAcc.get(rawStore, i));
+        }
+    }
+
+    @Benchmark public void rawWriteAll() {
+        for (int i = 0; i < N; i++) {
+            rawHeightAcc.set(rawStore, i, testHeight[i]);
+            rawTempAcc.set(rawStore, i, testTemp[i]);
+            rawActiveAcc.set(rawStore, i, testActive[i]);
+        }
+    }
+
+    @Benchmark public void rawRandomRead(Blackhole bh) {
+        for (int i = 0; i < N; i++) {
+            int idx = randIdx[i];
+            bh.consume(rawHeightAcc.get(rawStore, idx));
+            bh.consume(rawTempAcc.get(rawStore, idx));
+            bh.consume(rawActiveAcc.get(rawStore, idx));
+        }
+    }
+
+    @Benchmark public void rawRandomWrite() {
+        for (int i = 0; i < N; i++) {
+            int idx = randIdx[i];
+            rawHeightAcc.set(rawStore, idx, testHeight[i]);
+            rawTempAcc.set(rawStore, idx, testTemp[i]);
+            rawActiveAcc.set(rawStore, idx, testActive[i]);
+        }
+    }
+
+    @Benchmark public int rawReadSingle() {
+        return rawHeightAcc.get(rawStore, N / 2);
+    }
+
+    @Benchmark public void rawRowViewReadAll(Blackhole bh) {
+        for (int i = 0; i < N; i++) bh.consume(rawRowView.get(rawStore, i));
+    }
+
+    @Benchmark public void rawRowViewWriteAll() {
+        for (int i = 0; i < N; i++)
+            rawRowView.set(rawStore, i, new Terrain(testHeight[i], testTemp[i], testActive[i]));
+    }
+
+    @Benchmark public void rawRowViewRandomRead(Blackhole bh) {
+        for (int i = 0; i < N; i++) bh.consume(rawRowView.get(rawStore, randIdx[i]));
+    }
+
+    @Benchmark public void rawRowViewRandomWrite() {
+        for (int i = 0; i < N; i++)
+            rawRowView.set(rawStore, randIdx[i], new Terrain(testHeight[i], testTemp[i], testActive[i]));
+    }
+
+    // ====================================================================
+    // COLLECTIONS — PackedList and PackedIntMap
+    // ====================================================================
+
+    io.github.zzuegg.jbinary.collections.PackedList<Terrain>    packedList;
+    io.github.zzuegg.jbinary.collections.PackedIntMap<Terrain>  packedIntMap;
+
+    @Benchmark public void packedListReadAll(Blackhole bh) {
+        for (int i = 0; i < N; i++) bh.consume(packedList.get(i));
+    }
+
+    @Benchmark public void packedListWriteAll() {
+        for (int i = 0; i < N; i++)
+            packedList.set(i, new Terrain(testHeight[i], testTemp[i], testActive[i]));
+    }
+
+    @Benchmark public void packedListRandomRead(Blackhole bh) {
+        for (int i = 0; i < N; i++) bh.consume(packedList.get(randIdx[i]));
+    }
+
+    @Benchmark public void packedListRandomWrite() {
+        for (int i = 0; i < N; i++)
+            packedList.set(randIdx[i], new Terrain(testHeight[i], testTemp[i], testActive[i]));
+    }
+
+    @Benchmark public void packedIntMapReadAll(Blackhole bh) {
+        for (int i = 0; i < N; i++) bh.consume(packedIntMap.get(i));
+    }
+
+    @Benchmark public void packedIntMapWriteAll() {
+        for (int i = 0; i < N; i++)
+            packedIntMap.put(i, new Terrain(testHeight[i], testTemp[i], testActive[i]));
+    }
+
+    @Benchmark public void packedIntMapRandomRead(Blackhole bh) {
+        for (int i = 0; i < N; i++) bh.consume(packedIntMap.get(randIdx[i]));
+    }
+
+    @Benchmark public void packedIntMapRandomWrite() {
+        for (int i = 0; i < N; i++)
+            packedIntMap.put(randIdx[i], new Terrain(testHeight[i], testTemp[i], testActive[i]));
     }
 }
