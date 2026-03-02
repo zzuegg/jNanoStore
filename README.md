@@ -350,71 +350,71 @@ below the theoretical maximum.
 The benchmark suite (`DataStoreBenchmark`) measures all four `DataStore` implementations
 across three accessor patterns (`IntAccessor`, `DataCursor`, `RowView`) and five operation
 types (bulk read, bulk write, random read, random write, random read+write) against two
-reference baselines.  All results are from a **live JMH run** (JDK 25, JMH 1.37,
-3 warmup + 5 measurement × 1 s iterations, 1 fork, AverageTime mode, **1 000 ops** per
-benchmark).
+reference baselines.  A **multi-component scenario** (Terrain + Water, 5 fields total)
+is also included to measure realistic cross-component `DataCursor` performance.
+All results are from a **live JMH run** (JDK 25, JMH 1.37, 1 warmup + 1 measurement × 1 s
+iterations, 1 fork, AverageTime mode, **1 000 ops** per benchmark, pre-computed random data).
 
 ### Store × accessor × operation — direct accessor (IntAccessor)
 
 | Store | Bulk read | Bulk write | Rnd read | Rnd write | Rnd r+w |
 |-------|----------:|-----------:|---------:|----------:|--------:|
-| Baseline (arrays) | 366 | 1,376 | 1,113 | 1,639 | 1,870 |
-| HashMap (boxed) | 5,880 | 18,676 | 7,872 | 20,579 | 15,651 |
-| Packed | 3,027 | 14,413 | 3,863 | 14,715 | 10,535 |
-| Sparse | 17,897 | 42,932 | 21,938 | 45,148 | 33,944 |
-| Octree | 57,296 | 555,661 | 34,927 | 539,289 | 292,098 |
-| FastOctree | 25,589 | 684,887 | 22,685 | 641,994 | 322,177 |
+| Baseline (arrays) | 376 | 241 | 645 | 1,219 | 955 |
+| HashMap (boxed) | 5,995 | 18,547 | 8,144 | 18,412 | 14,656 |
+| Packed | 2,972 | 10,895 | 4,203 | 13,505 | 8,772 |
+| Sparse | 15,708 | 56,492 | 19,519 | 55,331 | 38,437 |
+| Octree | 22,228 | 549,425 | 22,603 | 552,599 | 296,724 |
+| FastOctree | 8,831 | 582,865 | 19,049 | 607,839 | 300,800 |
 
 All values ns/op — lower is faster.
 
-### Store × accessor × operation — DataCursor
+### Store × accessor × operation — DataCursor (single component)
 
 | Store | Bulk read | Bulk write | Rnd read | Rnd write | Rnd r+w |
 |-------|----------:|-----------:|---------:|----------:|--------:|
-| Packed | 32,657 | 35,625 | 32,636 | 39,697 | 34,629 |
-| Sparse | 41,410 | 70,019 | 43,290 | 73,352 | 57,587 |
-| Octree | 72,932 | 579,168 | 72,697 | 544,030 | 319,661 |
-| FastOctree | 78,072 | 713,217 | 79,663 | 676,089 | 361,832 |
+| Packed | 10,177 | 23,913 | 10,661 | 18,365 | 14,203 |
+| Sparse | 20,148 | 57,407 | 24,950 | 58,140 | 41,386 |
+| Octree | 22,079 | 558,699 | 28,233 | 566,485 | 291,255 |
+| FastOctree | 22,372 | 585,528 | 19,064 | 644,942 | 311,066 |
 
 ### Store × accessor × operation — RowView
 
 | Store | Bulk read | Bulk write | Rnd read | Rnd write | Rnd r+w |
 |-------|----------:|-----------:|---------:|----------:|--------:|
-| Packed | 126,705 | 39,816 | 156,038 | 40,839 | 91,560 |
-| Sparse | 136,812 | 74,239 | 147,428 | 76,379 | 118,364 |
-| Octree | 168,877 | 579,880 | 203,786 | 550,790 | 395,602 |
-| FastOctree | 181,763 | 727,075 | 193,898 | 688,819 | 453,000 |
+| Packed | 143,564 | 42,955 | 141,060 | 42,575 | 96,442 |
+| Sparse | 144,628 | 88,439 | 157,900 | 90,460 | 136,852 |
+| Octree | 161,117 | 585,541 | 166,880 | 589,893 | 389,014 |
+| FastOctree | 163,321 | 637,568 | 149,491 | 658,104 | 424,191 |
 
-### Visual comparison — bulk sequential read (1 000 rows, ns/op)
+### Multi-component scenario — DataCursor `WorldCursor` (Terrain + Water, 5 fields)
 
-```
-Store + accessor        |                          |    ns/op
-------------------------|--------------------------|----------
-Baseline  (arrays)      |▓                         |       366
-Packed    (direct)      |▓▓▓▓▓▓▓▓▓▓▓▓▓             |     3,027
-Packed    (Cursor)      |▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓| 32,657
-Packed    (RowView)     |▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓| 126,705 (each ▓ ≈ 5 000 ns)
-Sparse    (direct)      |▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓|  17,897
-Sparse    (Cursor)      |▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓|  41,410
-Octree    (direct)      |full bar ≈ 57 296 ns                              |  57,296
-FastOctree(direct)      |full bar ≈ 25 589 ns                              |  25,589
-HashMap   (boxed)       |▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓           |     5,880
-```
+This is the most realistic scenario: a single `DataCursor` projection reads/writes
+**five fields across two components** (`Terrain.height`, `Terrain.temperature`,
+`Terrain.active`, `Water.salinity`, `Water.frozen`) in one pass.
 
-> **Note:** `RowView.get()` allocates a new record per call — high read cost is expected.
-> `DataCursor` avoids allocation using `VarHandle`; use it in hot loops.
+| Store | Bulk read | Bulk write | Rnd read | Rnd write | Rnd r+w |
+|-------|----------:|-----------:|---------:|----------:|--------:|
+| Baseline (5 arrays) | 759 | 660 | 1,127 | 2,743 | 1,609 |
+| Packed | 15,698 | 20,163 | 15,702 | 26,364 | 21,866 |
+| Sparse | 32,837 | 93,864 | 35,295 | 94,313 | 64,972 |
+| Octree | 39,610 | 937,400 | 36,988 | 942,596 | 492,419 |
+| FastOctree | 34,463 | 1,042,187 | 34,029 | 1,073,341 | 531,554 |
+
+> **Note:** Octree/FastOctree write cost is high because each of the 1 000 rows carries a
+> *different* random value, preventing any tree collapse.  Use `beginBatch()` / `endBatch()`
+> for bulk uniform fills where values repeat.
 
 ### Single-element read (ns/op)
 
 | Store | ns/op |
 |-------|------:|
-| Baseline | 0.78 |
-| Packed (direct) | 2.82 |
-| Packed (Cursor) | 35.4 |
-| Sparse (direct) | 4.62 |
-| Octree (direct) | 18.9 |
-| FastOctree (direct) | 20.7 |
-| HashMap (boxed) | 4.01 |
+| Baseline | 0.84 |
+| Packed (direct) | 2.52 |
+| Packed (Cursor) | 7.98 |
+| Sparse (direct) | 4.74 |
+| Octree (direct) | 8.56 |
+| FastOctree (direct) | 8.08 |
+| HashMap (boxed) | 4.07 |
 
 **Why the differences?**
 
@@ -426,7 +426,7 @@ HashMap   (boxed)       |▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓       
 | `FastOctreeDataStore` | Same as octree but with primitive hash map + arena allocator (no boxing) | High-throughput voxel worlds; ~2–3× faster reads than `OctreeDataStore` |
 | HashMap store | Boxing + unboxing; `Object[]` allocation per write | Not recommended for performance-sensitive code |
 
-> **Octree write cost:** The benchmarks write 1 000 *different* values (height 0→255 cycling),
+> **Octree write cost:** The benchmarks write 1 000 *different* random values,
 > so no octree collapse occurs — every write triggers tree-manipulation work.  In real voxel
 > worlds with many identical neighbours, the tree collapses automatically and write cost drops
 > dramatically; use `beginBatch()` / `endBatch()` for bulk uniform fills.
