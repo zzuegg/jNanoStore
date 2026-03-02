@@ -1,10 +1,12 @@
-# jBinary Benchmark Results
+# BitKit Benchmark Results
 
 ## Overview
 
-All four `DataStore` implementations (packed, sparse, octree, fast-octree) are benchmarked
+All six `DataStore` implementations (raw, packed, chunked, sparse, octree, fast-octree) are benchmarked
 across three accessor patterns (`IntAccessor`, `DataCursor`, `RowView`) and five operation
-types:
+types.
+
+See [README.md](README.md) for a summary.  This page contains the complete result matrix.
 
 | Operation | Description |
 |-----------|-------------|
@@ -18,13 +20,7 @@ Two reference baselines are included:
 - **Baseline** — three parallel primitive arrays (`int[]`, `double[]`, `boolean[]`)
 - **HashMap** — `HashMap<Integer, Object[]>` per-row with no packing (fully boxed)
 
-A **multi-component scenario** (`multiXxx` benchmarks) adds a second component type
-(`Water` with `salinity` + `frozen`) and uses a `WorldCursor` projecting **five fields
-across two components** from a single shared store.  A five-array baseline
-(`multiBaselineXxx`) serves as the reference for that scenario.
-
-All benchmarks use **pre-computed, fixed-seed random data** (no inline arithmetic patterns)
-to reflect realistic workloads where field values come from existing data structures.
+All benchmarks use **pre-computed, fixed-seed random data** (no inline arithmetic patterns).
 
 ## Environment
 
@@ -45,14 +41,20 @@ All values in ns/op (lower = faster).
 
 | Benchmark | Bulk read | Bulk write | Rnd read | Rnd write | Rnd r+w |
 |-----------|----------:|-----------:|---------:|----------:|--------:|
-| `baselineReadAll` / `WriteAll` | 376 | 241 | 645 | 1,219 | 955 |
-| `hashmapReadAll` / `WriteAll` | 5,995 | 18,547 | 8,144 | 18,412 | 14,656 |
-| `packedReadAll` / `WriteAll` | 2,972 | 10,895 | 4,203 | 13,505 | 8,772 |
-| `sparseReadAll` / `WriteAll` | 15,708 | 56,492 | 19,519 | 55,331 | 38,437 |
-| `octreeReadAll` / `WriteAll` | 22,228 | 549,425 | 22,603 | 552,599 | 296,724 |
-| `octreeBatchWriteAll` | — | 324,784 | — | — | — |
-| `fastOctreeReadAll` / `WriteAll` | 8,831 | 582,865 | 19,049 | 607,839 | 300,800 |
-| `fastOctreeBatchWriteAll` | — | 335,491 | — | — | — |
+| `baselineReadAll` / `WriteAll` | 438 | 259 | 603 | 895 | 1,166 |
+| `hashmapReadAll` / `WriteAll` | 6,020 | 19,562 | 7,167 | 18,956 | 13,274 |
+| **`rawReadAll`** / `WriteAll` | **1,990** | **4,278** | **2,070** | **4,628** | — |
+| `packedReadAll` / `WriteAll` | 2,914 | 14,003 | 3,605 | 11,141 | 8,375 |
+| **`chunkedReadAll`** / `WriteAll` | **6,210** | **9,799** | **6,125** | **9,901** | **8,032** |
+| `sparseReadAll` / `WriteAll` | 15,868 | 58,350 | 18,388 | 59,755 | 38,068 |
+| `fastOctreeReadAll` / `WriteAll` | 18,531 | 655,631 | 9,401 | 674,429 | 328,151 |
+| `fastOctreeBatchWriteAll` | — | 329,806 | — | — | — |
+| `octreeReadAll` / `WriteAll` | 24,002 | 541,466 | 23,884 | 546,994 | 289,607 |
+| `octreeBatchWriteAll` | — | 332,427 | — | — | — |
+
+> **ChunkedDataStore** uses a 32×16×16 world (2 chunks along X) to exercise cross-chunk
+> access patterns.  Voxel coordinates span two 16³ chunk boundaries so the hash-map
+> probe is exercised on every access.
 
 ## Full results — DataCursor (ByteBuddy, single component)
 
@@ -61,88 +63,99 @@ instructions for all cursor fields.  After JIT warm-up the generated codec is fu
 
 | Benchmark | Bulk read | Bulk write | Rnd read | Rnd write | Rnd r+w |
 |-----------|----------:|-----------:|---------:|----------:|--------:|
-| `packedCursorReadAll` / `WriteAll` | 10,177 | 23,913 | 10,661 | 18,365 | 14,203 |
-| `sparseCursorReadAll` / `WriteAll` | 20,148 | 57,407 | 24,950 | 58,140 | 41,386 |
-| `octreeCursorReadAll` / `WriteAll` | 22,079 | 558,699 | 28,233 | 566,485 | 291,255 |
-| `fastOctreeCursorReadAll` / `WriteAll` | 22,372 | 585,528 | 19,064 | 644,942 | 311,066 |
+| `packedCursorReadAll` / `WriteAll` | 3,170 | 12,588 | 3,559 | 19,790 | 12,275 |
+| **`chunkedCursorReadAll`** / `WriteAll` | **6,153** | **23,755** | — | — | — |
+| `sparseCursorReadAll` / `WriteAll` | 19,947 | 60,432 | 20,479 | 62,267 | 40,966 |
+| `octreeCursorReadAll` / `WriteAll` | 22,890 | 547,617 | 24,649 | 558,164 | 284,772 |
+| `fastOctreeCursorReadAll` / `WriteAll` | 19,912 | 657,381 | 19,249 | 678,063 | 351,615 |
 
 ## Full results — multi-component scenario (Terrain + Water, 5 fields via WorldCursor)
 
 The `WorldCursor` reads/writes five fields spanning two registered component types
 (`Terrain.height`, `Terrain.temperature`, `Terrain.active`, `Water.salinity`,
 `Water.frozen`) in a single `DataCursor.update()` / `flush()` call.
-The `multiBaseline` row uses five parallel primitive arrays as a reference.
 
 | Benchmark | Bulk read | Bulk write | Rnd read | Rnd write | Rnd r+w |
 |-----------|----------:|-----------:|---------:|----------:|--------:|
-| `multiBaselineReadAll` / `WriteAll` | 759 | 660 | 1,127 | 2,743 | 1,609 |
-| `multiPackedCursorReadAll` / `WriteAll` | 15,698 | 20,163 | 15,702 | 26,364 | 21,866 |
-| `multiSparseCursorReadAll` / `WriteAll` | 32,837 | 93,864 | 35,295 | 94,313 | 64,972 |
-| `multiOctreeCursorReadAll` / `WriteAll` | 39,610 | 937,400 | 36,988 | 942,596 | 492,419 |
-| `multiFastOctreeCursorReadAll` / `WriteAll` | 34,463 | 1,042,187 | 34,029 | 1,073,341 | 531,554 |
+| `multiBaselineReadAll` / `WriteAll` | 912 | 443 | 1,093 | 1,815 | 1,473 |
+| `multiPackedCursorReadAll` / `WriteAll` | 14,747 | 25,042 | 5,834 | 19,374 | 18,145 |
+| `multiSparseCursorReadAll` / `WriteAll` | 33,055 | 94,607 | 33,414 | 95,478 | 63,020 |
+| `multiOctreeCursorReadAll` / `WriteAll` | 39,333 | 925,709 | 40,692 | 926,240 | 483,222 |
+| `multiFastOctreeCursorReadAll` / `WriteAll` | 32,633 | 1,162,157 | 27,158 | 1,259,203 | 635,327 |
 
 > **Note:** Octree/FastOctree write cost roughly doubles relative to single-component because
 > the combined `Terrain + Water` bit-stride is larger, increasing tree-manipulation work per
-> write.  Packed and Sparse cost is comparable to single-component since two components still
-> fit in one `long` word per row.
+> write.
 
 ## Full results — DataCursor (VarHandle fallback)
 
 `DataCursor.ofVarHandle()` uses the VarHandle-based fallback path, bypassing ByteBuddy.
-This measures the overhead of indirect VarHandle dispatch for load/flush operations.
 
 | Benchmark | Bulk read | Bulk write | Rnd read | Rnd write |
 |-----------|----------:|-----------:|---------:|----------:|
-| `packedCursorVhReadAll` / `WriteAll` | 32,064 | 47,667 | 31,637 | 50,058 |
-| `sparseCursorVhReadAll` / `WriteAll` | 45,527 | 83,051 | 48,800 | 86,364 |
+| `packedCursorVhReadAll` / `WriteAll` | 31,481 | 43,989 | 31,190 | 49,073 |
+| `sparseCursorVhReadAll` / `WriteAll` | 48,101 | 83,656 | 49,242 | 83,554 |
 
 ## Full results — RowView
 
-| Benchmark | Bulk read | Bulk write | Rnd read | Rnd write | Rnd r+w |
-|-----------|----------:|-----------:|---------:|----------:|--------:|
-| `packedRowViewReadAll` / `WriteAll` | 143,564 | 42,955 | 141,060 | 42,575 | 96,442 |
-| `sparseRowViewReadAll` / `WriteAll` | 144,628 | 88,439 | 157,900 | 90,460 | 136,852 |
-| `octreeRowViewReadAll` / `WriteAll` | 161,117 | 585,541 | 166,880 | 589,893 | 389,014 |
-| `fastOctreeRowViewReadAll` / `WriteAll` | 163,321 | 637,568 | 149,491 | 658,104 | 424,191 |
+| Benchmark | Bulk read | Bulk write | Rnd read | Rnd write |
+|-----------|----------:|-----------:|---------:|----------:|
+| `packedRowViewReadAll` / `WriteAll` | 130,319 | 44,332 | 133,689 | 48,245 |
+| **`chunkedRowViewReadAll`** / `WriteAll` | **145,586** | **52,176** | — | — |
+| `sparseRowViewReadAll` / `WriteAll` | 152,118 | 89,341 | 157,430 | 90,015 |
+| `octreeRowViewReadAll` / `WriteAll` | 142,897 | 577,189 | 158,932 | 575,966 |
+| `fastOctreeRowViewReadAll` / `WriteAll` | 156,263 | 700,549 | 157,980 | 723,783 |
 
 ## Single-element read (ns/op)
 
 | Benchmark | ns/op |
 |-----------|------:|
-| `baselineReadSingle` | 0.84 |
-| `packedReadSingle` | 2.52 |
-| `sparseReadSingle` | 4.74 |
-| `hashmapReadSingle` | 4.07 |
-| `octreeReadSingle` | 8.56 |
-| `fastOctreeReadSingle` | 8.08 |
-| `packedCursorReadSingle` (ByteBuddy) | 7.98 |
-| `packedCursorVhReadSingle` (VarHandle) | 31.81 |
+| `baselineReadSingle` | 0.87 |
+| `rawReadSingle` | 1.61 |
+| `packedReadSingle` | 2.87 |
+| `hashmapReadSingle` | 3.64 |
+| `sparseReadSingle` | 4.21 |
+| **`chunkedReadSingle`** | **4.43** |
+| `packedCursorReadSingle` (ByteBuddy) | 7.17 |
+| `fastOctreeReadSingle` | 7.53 |
+| `octreeReadSingle` | 8.49 |
+| `packedCursorVhReadSingle` (VarHandle) | 35.01 |
 
-## Multi-component scenario analysis
+## Collections
 
-### Single vs multi-component bulk read (ns/op)
+| Benchmark | Bulk read | Bulk write | Rnd read | Rnd write |
+|-----------|----------:|-----------:|---------:|----------:|
+| `packedListReadAll` / `WriteAll` | 129,011 | 200,284 | 129,011 | 196,144 |
+| `packedIntMapReadAll` / `WriteAll` | 147,123 | 276,556 | 154,217 | 281,963 |
 
-| Store | Single (3 fields) | Multi (5 fields) | Overhead |
-|-------|------------------:|-----------------:|---------:|
-| Baseline arrays | 376 | 759 | 2.0× |
-| Packed (DataCursor) | 10,177 | 15,698 | 1.5× |
-| Sparse (DataCursor) | 20,148 | 32,837 | 1.6× |
-| Octree (DataCursor) | 22,079 | 39,610 | 1.8× |
-| FastOctree (DataCursor) | 22,372 | 34,463 | 1.5× |
+## Key takeaways
 
-Adding two more fields (67% more fields) adds only ~50–80% more read time on packed/sparse
-stores — sub-linear scaling thanks to the compact bit-packed layout keeping both components
-in the same `long` words.
+### Reads
+- **`RawDataStore` bulk read** (1 990 ns) is the fastest store: ~1.5× baseline; no bit
+  operations, just raw array access.
+- **Direct `IntAccessor` bulk read** on Packed is ~7× slower than a baseline array scan
+  (bit-unpacking overhead) but much faster than sparse/octree options.
+- **`ChunkedDataStore` bulk read** (6 210 ns) is ~2× Packed but ~3× faster than Sparse
+  and FastOctree — the extra hash-probe overhead per chunk is small relative to the
+  bit-packed read savings.
+- **`DataCursor` (ByteBuddy) bulk read** is competitive after JIT warm-up, and ~10× faster
+  than the VarHandle fallback on packed stores.
+- **`RowView` bulk read** is expensive because it allocates a new record instance per `get()`.
 
-### Key multi-component takeaways
+### Writes
+- **ChunkedDataStore writes** (9 799 ns bulk) are ~6× faster than SparseDataStore writes
+  because each chunk is a contiguous PackedDataStore — no per-row HashMap overhead.
+- **Octree and FastOctree non-batch writes** are expensive (~541–656 µs for 1 000 rows).
+  Use `beginBatch()` / `endBatch()` for bulk writes.
 
-- **Packed** is the fastest multi-component store: 15 700 ns bulk read for 5 fields across
-  2 components, only ~21× slower than 5 raw array reads (759 ns).
-- **Sparse** and **FastOctree** are within 2.2× of each other for bulk reads (~33–35 µs).
-- **Octree writes** are expensive (~940 µs bulk) because random values prevent collapse.
-  Use `beginBatch()` / `endBatch()` for uniform fills.
-- The `DataCursor` API makes multi-component access as simple as single-component:
-  just add more `@StoreField` annotations to the cursor class.
+### Accessor pattern guide
+
+| Pattern | Alloc/row? | Hot-loop? | Multi-component? | Best for |
+|---------|-----------|-----------|-----------------|----------|
+| `IntAccessor` (direct) | None | ✓ fastest | one field | Maximum throughput on a single field |
+| `DataCursor<T>` (ByteBuddy) | None | ✓ fast | any fields | Cross-component projections in hot loops |
+| `DataCursor<T>` (VarHandle) | None | ✗ (~10× slower on packed) | any fields | Fallback when ByteBuddy unavailable |
+| `RowView<T>` | 1 record/read | ✗ (reads) | one component | Ergonomic whole-record get/set |
 
 ## ByteBuddy vs VarHandle cursor — comparison
 
@@ -152,53 +165,20 @@ All values in ns/op.
 
 | Operation | ByteBuddy cursor | VarHandle cursor | Speedup |
 |-----------|----------------:|-----------------:|--------:|
-| Bulk read | 10,177 | 32,064 | **3.1×** |
-| Bulk write | 23,913 | 47,667 | **2.0×** |
-| Random read | 10,661 | 31,637 | **3.0×** |
-| Random write | 18,365 | 50,058 | **2.7×** |
-| Single read | 7.98 | 31.81 | **4.0×** |
+| Bulk read | 3,170 | 31,481 | **9.9×** |
+| Bulk write | 12,588 | 43,989 | **3.5×** |
+| Random read | 3,559 | 31,190 | **8.8×** |
+| Random write | 19,790 | 49,073 | **2.5×** |
+| Single read | 7.17 | 35.01 | **4.9×** |
 
 ### Sparse store (1 000 rows)
 
 | Operation | ByteBuddy cursor | VarHandle cursor | Speedup |
 |-----------|----------------:|-----------------:|--------:|
-| Bulk read | 20,148 | 45,527 | **2.3×** |
-| Bulk write | 57,407 | 83,051 | **1.4×** |
-| Random read | 24,950 | 48,800 | **2.0×** |
-| Random write | 58,140 | 86,364 | **1.5×** |
-
-## Key takeaways
-
-### Reads
-- **Direct `IntAccessor` bulk read** on Packed is ~8× slower than a baseline array scan
-  (bit-unpacking overhead) but ~2× faster than HashMap.
-- **`DataCursor` (ByteBuddy) bulk read** is competitive after JIT warm-up, and ~3× faster
-  than the VarHandle fallback on packed stores.
-- **`DataCursor` (VarHandle fallback) bulk read** is ~3× slower than ByteBuddy on packed
-  stores because VarHandle dispatch is harder for the JIT to inline.
-- **`RowView` bulk read** is the most expensive for reads because it allocates a new record
-  instance on every `get()` call.  Use it for ergonomic one-off record reads, not hot loops.
-- **Octree and FastOctree reads** involve Morton-code decoding and tree traversal;
-  FastOctree is ~2–3× faster than Octree on reads thanks to its primitive hash map.
-
-### Writes
-- **Packed and Sparse writes** are fast: just bit-shift + mask operations on a `long[]`.
-  `DataCursor` (ByteBuddy) adds moderate overhead; VarHandle adds ~2× overhead vs ByteBuddy.
-- **Octree and FastOctree non-batch writes** are expensive (~550–610 µs for 1 000 rows)
-  because every write with a *different* value triggers tree-manipulation.  **Use
-  `beginBatch()` / `endBatch()` for bulk writes** — batch mode roughly halves write cost
-  (~325–335 µs).
-- For octrees, `RowView.set()` and `DataCursor.flush()` cost similarly to direct
-  `IntAccessor.set()` — the tree-traversal overhead dominates.
-
-### Accessor pattern guide
-
-| Pattern | Alloc/row? | Hot-loop? | Multi-component? | Best for |
-|---------|-----------|-----------|-----------------|----------|
-| `IntAccessor` (direct) | None | ✓ fastest | one field | Maximum throughput on a single field |
-| `DataCursor<T>` (ByteBuddy) | None | ✓ fast | any fields | Cross-component projections in hot loops |
-| `DataCursor<T>` (VarHandle) | None | ✗ (~3× slower on packed) | any fields | Fallback when ByteBuddy unavailable |
-| `RowView<T>` | 1 record/read | ✗ (reads) | one component | Ergonomic whole-record get/set |
+| Bulk read | 19,947 | 48,101 | **2.4×** |
+| Bulk write | 60,432 | 83,656 | **1.4×** |
+| Random read | 20,479 | 49,242 | **2.4×** |
+| Random write | 62,267 | 83,554 | **1.3×** |
 
 ## Reproduction
 
@@ -210,7 +190,5 @@ All values in ns/op.
 ./gradlew jmhCi
 ```
 
-The benchmark fat-jar is assembled automatically.
-
 > **Tip:** Run on dedicated hardware with CPU frequency scaling disabled for
-> more stable measurements.  Add `-f 3` for multiple forks.
+> more stable measurements.
