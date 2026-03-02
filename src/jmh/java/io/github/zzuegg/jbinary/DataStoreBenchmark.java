@@ -1483,8 +1483,6 @@ public class DataStoreBenchmark {
     // ====================================================================
     // RAW STORE — array-backed, no bit compression
     // ====================================================================
-    // RAW STORE — array-backed, no bit compression
-    // ====================================================================
 
     RawDataStore<Terrain> rawStore;
     IntAccessor    rawHeightAcc;

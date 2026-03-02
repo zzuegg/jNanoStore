@@ -311,7 +311,10 @@ public final class ChunkedDataStore<T> implements DataStore<T> {
         return spread3(x) | (spread3(y) << 1) | (spread3(z) << 2);
     }
 
-    /** Spreads a 10-bit integer so each bit occupies every 3rd position. */
+    /**
+     * Spreads a value ≤ 10 bits wide so each source bit occupies every 3rd position
+     * in the output (30-bit result).  Supports world coordinates up to 1 024 per axis.
+     */
     private static long spread3(int v) {
         long x = v & 0x3FFL;
         x = (x ^ (x << 16)) & 0xFF0000FFL;
@@ -340,10 +343,7 @@ public final class ChunkedDataStore<T> implements DataStore<T> {
             // write the chunk's raw data directly (without the chunk's own header)
             PackedDataStore<T> chunk = hashValues[i];
             for (int row = 0; row < CHUNK_VOXELS; row++) {
-                // read each long word of this row
-                int base = row * chunk.rowStrideLongs();
                 for (int w = 0; w < chunk.rowStrideLongs(); w++) {
-                    // We access via readBits — write each 64-bit word of the row
                     dos.writeLong(chunk.readBits(row, w * 64, 64));
                 }
             }
