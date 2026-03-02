@@ -9,6 +9,7 @@ import io.github.zzuegg.jbinary.annotation.DecimalField;
 import io.github.zzuegg.jbinary.annotation.StoreField;
 import io.github.zzuegg.jbinary.octree.FastOctreeDataStore;
 import io.github.zzuegg.jbinary.octree.OctreeDataStore;
+import io.github.zzuegg.jbinary.ChunkedDataStore;
 import org.openjdk.jmh.annotations.*;
 import org.openjdk.jmh.infra.Blackhole;
 
@@ -88,6 +89,16 @@ public class DataStoreBenchmark {
     int[]          fastOctreeRows;
     RowView<Terrain> fastOctreeRowView;
     DataCursor<TerrainCursor> fastOctreeCursor;
+
+    // ------------------------------------------------------------------ chunked store (16×16×16 chunks; world 32×16×16 → 2 chunks)
+    ChunkedDataStore<Terrain> chunkedStore;
+    IntAccessor    chunkedHeightAcc;
+    DoubleAccessor chunkedTempAcc;
+    BoolAccessor   chunkedActiveAcc;
+    int[]          chunkedRows;
+    int[]          randChunkedRows;
+    RowView<Terrain> chunkedRowView;
+    DataCursor<TerrainCursor> chunkedCursor;
 
     // ------------------------------------------------------------------ baseline store (parallel arrays)
     int[]     baselineHeight;
@@ -308,6 +319,27 @@ public class DataStoreBenchmark {
         randFastOctreeRows      = shuffledArray(fastOctreeRows, 42L);
         randMultiOctreeRows     = shuffledArray(multiOctreeRows, 42L);
         randMultiFastOctreeRows = shuffledArray(multiFastOctreeRows, 42L);
+
+        // chunked store (world 32×16×16 → voxels span 2 chunks along X)
+        chunkedStore     = DataStore.chunked(32, 16, 16, Terrain.class);
+        chunkedHeightAcc = Accessors.intFieldInStore(chunkedStore, Terrain.class, "height");
+        chunkedTempAcc   = Accessors.doubleFieldInStore(chunkedStore, Terrain.class, "temperature");
+        chunkedActiveAcc = Accessors.boolFieldInStore(chunkedStore, Terrain.class, "active");
+        chunkedRowView   = RowView.of(chunkedStore, Terrain.class);
+        chunkedCursor    = DataCursor.of(chunkedStore, TerrainCursor.class);
+        chunkedRows = new int[N];
+        for (int i = 0; i < N; i++) {
+            int x = i & 0x1F;          // 0–31 (spans 2 chunks along X)
+            int y = (i >> 5) & 0xF;    // 0–15
+            int z = (i >> 9) & 0xF;    // 0–1
+            chunkedRows[i] = chunkedStore.row(x, y, z);
+        }
+        for (int i = 0; i < N; i++) {
+            chunkedHeightAcc.set(chunkedStore, chunkedRows[i], testHeight[i]);
+            chunkedTempAcc.set(chunkedStore, chunkedRows[i], testTemp[i]);
+            chunkedActiveAcc.set(chunkedStore, chunkedRows[i], testActive[i]);
+        }
+        randChunkedRows = shuffledArray(chunkedRows, 42L);
 
         // raw store (no bit compression)
         rawStore     = DataStore.raw(N, Terrain.class);
@@ -1368,6 +1400,88 @@ public class DataStoreBenchmark {
         }
     }
 
+    // ====================================================================
+    // CHUNKED STORE — chunk-based PackedDataStore for 3-D voxel worlds
+    // ====================================================================
+
+    @Benchmark public void chunkedReadAll(Blackhole bh) {
+        for (int i = 0; i < N; i++) {
+            bh.consume(chunkedHeightAcc.get(chunkedStore, chunkedRows[i]));
+            bh.consume(chunkedTempAcc.get(chunkedStore, chunkedRows[i]));
+            bh.consume(chunkedActiveAcc.get(chunkedStore, chunkedRows[i]));
+        }
+    }
+
+    @Benchmark public void chunkedWriteAll() {
+        for (int i = 0; i < N; i++) {
+            chunkedHeightAcc.set(chunkedStore, chunkedRows[i], testHeight[i]);
+            chunkedTempAcc.set(chunkedStore, chunkedRows[i], testTemp[i]);
+            chunkedActiveAcc.set(chunkedStore, chunkedRows[i], testActive[i]);
+        }
+    }
+
+    @Benchmark public void chunkedRandomRead(Blackhole bh) {
+        for (int i = 0; i < N; i++) {
+            bh.consume(chunkedHeightAcc.get(chunkedStore, randChunkedRows[i]));
+            bh.consume(chunkedTempAcc.get(chunkedStore, randChunkedRows[i]));
+            bh.consume(chunkedActiveAcc.get(chunkedStore, randChunkedRows[i]));
+        }
+    }
+
+    @Benchmark public void chunkedRandomWrite() {
+        for (int i = 0; i < N; i++) {
+            chunkedHeightAcc.set(chunkedStore, randChunkedRows[i], testHeight[i]);
+            chunkedTempAcc.set(chunkedStore, randChunkedRows[i], testTemp[i]);
+            chunkedActiveAcc.set(chunkedStore, randChunkedRows[i], testActive[i]);
+        }
+    }
+
+    @Benchmark public void chunkedRandomReadWrite(Blackhole bh) {
+        for (int i = 0; i < N; i++) {
+            int row = randChunkedRows[i];
+            if ((i & 1) == 0) {
+                bh.consume(chunkedHeightAcc.get(chunkedStore, row));
+                bh.consume(chunkedTempAcc.get(chunkedStore, row));
+                bh.consume(chunkedActiveAcc.get(chunkedStore, row));
+            } else {
+                chunkedHeightAcc.set(chunkedStore, row, testHeight[i]);
+                chunkedTempAcc.set(chunkedStore, row, testTemp[i]);
+                chunkedActiveAcc.set(chunkedStore, row, testActive[i]);
+            }
+        }
+    }
+
+    @Benchmark public int chunkedReadSingle() {
+        return chunkedHeightAcc.get(chunkedStore, chunkedRows[N / 2]);
+    }
+
+    @Benchmark public void chunkedCursorReadAll(Blackhole bh) {
+        for (int i = 0; i < N; i++) {
+            TerrainCursor d = chunkedCursor.update(chunkedStore, chunkedRows[i]);
+            bh.consume(d.height); bh.consume(d.temperature); bh.consume(d.active);
+        }
+    }
+
+    @Benchmark public void chunkedCursorWriteAll() {
+        TerrainCursor d = chunkedCursor.get();
+        for (int i = 0; i < N; i++) {
+            d.height = testHeight[i]; d.temperature = testTemp[i]; d.active = testActive[i];
+            chunkedCursor.flush(chunkedStore, chunkedRows[i]);
+        }
+    }
+
+    @Benchmark public void chunkedRowViewReadAll(Blackhole bh) {
+        for (int i = 0; i < N; i++) bh.consume(chunkedRowView.get(chunkedStore, chunkedRows[i]));
+    }
+
+    @Benchmark public void chunkedRowViewWriteAll() {
+        for (int i = 0; i < N; i++)
+            chunkedRowView.set(chunkedStore, chunkedRows[i],
+                    new Terrain(testHeight[i], testTemp[i], testActive[i]));
+    }
+
+    // ====================================================================
+    // RAW STORE — array-backed, no bit compression
     // ====================================================================
     // RAW STORE — array-backed, no bit compression
     // ====================================================================

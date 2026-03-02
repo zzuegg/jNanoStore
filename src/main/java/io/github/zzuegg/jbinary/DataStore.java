@@ -14,13 +14,15 @@ import java.nio.ByteBuffer;
  * the store holds — there is no bound on {@code T}, so you can use your own marker
  * interfaces, a concrete component type, or any other type that makes sense in context.
  *
- * <p>Four concrete implementations are provided:
+ * <p>Six concrete implementations are provided:
  * <ul>
  *   <li>{@link PackedDataStore} — dense, pre-allocates a single {@code long[]} for all rows.</li>
  *   <li>{@link SparseDataStore} — sparse, allocates storage only for rows that are written to;
  *       unwritten rows read back as all-zeros.</li>
  *   <li>{@link RawDataStore} — array-backed, no bit compression; each field occupies one full
  *       {@code long} slot for maximum read/write speed.</li>
+ *   <li>{@link ChunkedDataStore} — chunk-based store optimised for large 3-D voxel worlds;
+ *       combines near-PackedDataStore read speed with near-OctreeDataStore memory efficiency.</li>
  *   <li>{@link io.github.zzuegg.jbinary.octree.OctreeDataStore} — sparse 3-D octree with
  *       automatic region collapsing.</li>
  *   <li>{@link io.github.zzuegg.jbinary.octree.FastOctreeDataStore} — high-performance octree
@@ -209,5 +211,36 @@ public interface DataStore<T> {
     @SafeVarargs
     static <T> RawDataStore<T> raw(int capacity, Class<? extends T>... componentClasses) {
         return RawDataStore.create(capacity, componentClasses);
+    }
+
+    /**
+     * Creates a {@link ChunkedDataStore} for a 3-D voxel world of the given dimensions.
+     *
+     * <p>The world is partitioned into 16×16×16 chunks; each non-empty chunk is backed
+     * by a {@link PackedDataStore} of 4 096 rows.  Chunks are indexed by a sparse
+     * open-addressing hash map keyed on Morton-encoded chunk coordinates, so only
+     * written regions consume memory.
+     *
+     * <p>Use {@link ChunkedDataStore#row(int, int, int)} to convert 3-D voxel
+     * coordinates to the flat row index required by accessors:
+     * <pre>{@code
+     * ChunkedDataStore<Voxel> world = DataStore.chunked(1024, 256, 1024, Voxel.class);
+     * IntAccessor material = Accessors.intFieldInStore(world, Voxel.class, "material");
+     * material.set(world, world.row(100, 64, 200), 5);
+     * }</pre>
+     *
+     * @param worldX           world size along the X axis (must be ≥ 1)
+     * @param worldY           world size along the Y axis (must be ≥ 1)
+     * @param worldZ           world size along the Z axis (must be ≥ 1)
+     * @param componentClasses one or more annotated component types to register
+     * @throws IllegalArgumentException if any dimension is &lt; 1, if no component classes
+     *         are supplied, or if the total voxel count exceeds {@link Integer#MAX_VALUE}
+     */
+    @SafeVarargs
+    @SuppressWarnings("unchecked")
+    static <T> ChunkedDataStore<T> chunked(int worldX, int worldY, int worldZ,
+                                           Class<? extends T>... componentClasses) {
+        return (ChunkedDataStore<T>) ChunkedDataStore.create(worldX, worldY, worldZ,
+                componentClasses);
     }
 }
