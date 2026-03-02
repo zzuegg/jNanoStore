@@ -32,11 +32,25 @@ public class DataStoreBenchmark {
             @BoolField boolean active
     ) {}
 
-    // ------------------------------------------------------------------ DataCursor projection class
+    record Water(
+            @DecimalField(min = 0.0, max = 1.0, precision = 4) double salinity,
+            @BoolField boolean frozen
+    ) {}
+
+    // ------------------------------------------------------------------ DataCursor projection classes
     public static class TerrainCursor {
         @StoreField(component = Terrain.class, field = "height")      public int     height;
         @StoreField(component = Terrain.class, field = "temperature") public double  temperature;
         @StoreField(component = Terrain.class, field = "active")      public boolean active;
+    }
+
+    /** Multi-component cursor spanning both Terrain and Water fields. */
+    public static class WorldCursor {
+        @StoreField(component = Terrain.class, field = "height")      public int     height;
+        @StoreField(component = Terrain.class, field = "temperature") public double  temperature;
+        @StoreField(component = Terrain.class, field = "active")      public boolean active;
+        @StoreField(component = Water.class,   field = "salinity")    public double  salinity;
+        @StoreField(component = Water.class,   field = "frozen")      public boolean frozen;
     }
 
     // ------------------------------------------------------------------ packed store
@@ -82,6 +96,40 @@ public class DataStoreBenchmark {
 
     // ------------------------------------------------------------------ HashMap store (boxed Object[] per row)
     Map<Integer, Object[]> hashmapStore;
+
+    // ------------------------------------------------------------------ multi-component packed store (Terrain + Water)
+    DataStore multiPackedStore;
+    DataCursor<WorldCursor> multiPackedCursor;
+
+    // ------------------------------------------------------------------ multi-component sparse store
+    DataStore multiSparseStore;
+    DataCursor<WorldCursor> multiSparseCursor;
+
+    // ------------------------------------------------------------------ multi-component octree store
+    OctreeDataStore     multiOctreeStore;
+    int[]               multiOctreeRows;
+    int[]               randMultiOctreeRows;
+    DataCursor<WorldCursor> multiOctreeCursor;
+
+    // ------------------------------------------------------------------ multi-component fast octree store
+    FastOctreeDataStore multiFastOctreeStore;
+    int[]               multiFastOctreeRows;
+    int[]               randMultiFastOctreeRows;
+    DataCursor<WorldCursor> multiFastOctreeCursor;
+
+    // ------------------------------------------------------------------ multi-component baseline (5 parallel arrays)
+    int[]     multiBaselineHeight;
+    double[]  multiBaselineTemp;
+    boolean[] multiBaselineActive;
+    double[]  multiBaselineSalinity;
+    boolean[] multiBaselineFrozen;
+
+    // ------------------------------------------------------------------ pre-computed random test data (fixed seed)
+    int[]     testHeight;
+    double[]  testTemp;
+    boolean[] testActive;
+    double[]  testSalinity;
+    boolean[] testFrozen;
 
     static final int N = 1000;
 
@@ -156,10 +204,25 @@ public class DataStoreBenchmark {
         // HashMap store (boxed Object[] per row, no packing)
         hashmapStore = new HashMap<>((int)(N / 0.75) + 1);
 
+        // pre-computed realistic random test data (fixed seed for reproducibility)
+        testHeight   = new int[N];
+        testTemp     = new double[N];
+        testActive   = new boolean[N];
+        testSalinity = new double[N];
+        testFrozen   = new boolean[N];
+        Random dataRng = new Random(123L);
         for (int i = 0; i < N; i++) {
-            int h     = i % 256;
-            double t  = (i % 100) - 50.0;
-            boolean a = (i & 1) == 0;
+            testHeight[i]   = dataRng.nextInt(256);
+            testTemp[i]     = dataRng.nextDouble() * 100.0 - 50.0;
+            testActive[i]   = dataRng.nextBoolean();
+            testSalinity[i] = dataRng.nextDouble();
+            testFrozen[i]   = dataRng.nextBoolean();
+        }
+
+        for (int i = 0; i < N; i++) {
+            int h     = testHeight[i];
+            double t  = testTemp[i];
+            boolean a = testActive[i];
 
             packedHeightAcc.set(packedStore, i, h);
             packedTempAcc.set(packedStore, i, t);
@@ -184,10 +247,67 @@ public class DataStoreBenchmark {
             hashmapStore.put(i, new Object[]{h, t, a});
         }
 
+        // multi-component packed store (Terrain + Water)
+        multiPackedStore  = DataStore.of(N, Terrain.class, Water.class);
+        multiPackedCursor = DataCursor.of(multiPackedStore, WorldCursor.class);
+
+        // multi-component sparse store
+        multiSparseStore  = DataStore.sparse(N, Terrain.class, Water.class);
+        multiSparseCursor = DataCursor.of(multiSparseStore, WorldCursor.class);
+
+        // multi-component octree store (maxDepth=4 → 16×16×16)
+        multiOctreeStore = OctreeDataStore.builder(4)
+                .component(Terrain.class)
+                .component(Water.class)
+                .build();
+        multiOctreeRows = new int[N];
+        for (int i = 0; i < N; i++) {
+            int x = i & 0xF; int y = (i >> 4) & 0xF; int z = (i >> 8) & 0x3;
+            multiOctreeRows[i] = multiOctreeStore.row(x, y, z);
+        }
+        multiOctreeCursor = DataCursor.of(multiOctreeStore, WorldCursor.class);
+
+        // multi-component fast octree store
+        multiFastOctreeStore = FastOctreeDataStore.builder(4)
+                .component(Terrain.class)
+                .component(Water.class)
+                .build();
+        multiFastOctreeRows = new int[N];
+        for (int i = 0; i < N; i++) {
+            int x = i & 0xF; int y = (i >> 4) & 0xF; int z = (i >> 8) & 0x3;
+            multiFastOctreeRows[i] = multiFastOctreeStore.row(x, y, z);
+        }
+        multiFastOctreeCursor = DataCursor.of(multiFastOctreeStore, WorldCursor.class);
+
+        // multi-component baseline (5 parallel primitive arrays)
+        multiBaselineHeight   = new int[N];
+        multiBaselineTemp     = new double[N];
+        multiBaselineActive   = new boolean[N];
+        multiBaselineSalinity = new double[N];
+        multiBaselineFrozen   = new boolean[N];
+
+        // populate all multi-component stores with the same random test data
+        WorldCursor wd = multiPackedCursor.get();
+        for (int i = 0; i < N; i++) {
+            wd.height = testHeight[i]; wd.temperature = testTemp[i]; wd.active = testActive[i];
+            wd.salinity = testSalinity[i]; wd.frozen = testFrozen[i];
+            multiPackedCursor.flush(multiPackedStore, i);
+            multiSparseCursor.flush(multiSparseStore, i);
+            multiOctreeCursor.flush(multiOctreeStore, multiOctreeRows[i]);
+            multiFastOctreeCursor.flush(multiFastOctreeStore, multiFastOctreeRows[i]);
+            multiBaselineHeight[i]   = testHeight[i];
+            multiBaselineTemp[i]     = testTemp[i];
+            multiBaselineActive[i]   = testActive[i];
+            multiBaselineSalinity[i] = testSalinity[i];
+            multiBaselineFrozen[i]   = testFrozen[i];
+        }
+
         // random-access index arrays (fixed seed for reproducibility)
-        randIdx          = shuffled(N, 42L);
-        randOctreeRows   = shuffledArray(octreeRows, 42L);
-        randFastOctreeRows = shuffledArray(fastOctreeRows, 42L);
+        randIdx                 = shuffled(N, 42L);
+        randOctreeRows          = shuffledArray(octreeRows, 42L);
+        randFastOctreeRows      = shuffledArray(fastOctreeRows, 42L);
+        randMultiOctreeRows     = shuffledArray(multiOctreeRows, 42L);
+        randMultiFastOctreeRows = shuffledArray(multiFastOctreeRows, 42L);
     }
 
     // ------------------------------------------------------------------ shuffle helpers
@@ -227,9 +347,9 @@ public class DataStoreBenchmark {
 
     @Benchmark public void packedWriteAll() {
         for (int i = 0; i < N; i++) {
-            packedHeightAcc.set(packedStore, i, i % 256);
-            packedTempAcc.set(packedStore, i, (i % 100) - 50.0);
-            packedActiveAcc.set(packedStore, i, (i & 1) == 0);
+            packedHeightAcc.set(packedStore, i, testHeight[i]);
+            packedTempAcc.set(packedStore, i, testTemp[i]);
+            packedActiveAcc.set(packedStore, i, testActive[i]);
         }
     }
 
@@ -245,9 +365,9 @@ public class DataStoreBenchmark {
     @Benchmark public void packedRandomWrite() {
         for (int i = 0; i < N; i++) {
             int idx = randIdx[i];
-            packedHeightAcc.set(packedStore, idx, i % 256);
-            packedTempAcc.set(packedStore, idx, (i % 100) - 50.0);
-            packedActiveAcc.set(packedStore, idx, (i & 1) == 0);
+            packedHeightAcc.set(packedStore, idx, testHeight[i]);
+            packedTempAcc.set(packedStore, idx, testTemp[i]);
+            packedActiveAcc.set(packedStore, idx, testActive[i]);
         }
     }
 
@@ -259,9 +379,9 @@ public class DataStoreBenchmark {
                 bh.consume(packedTempAcc.get(packedStore, idx));
                 bh.consume(packedActiveAcc.get(packedStore, idx));
             } else {
-                packedHeightAcc.set(packedStore, idx, i % 256);
-                packedTempAcc.set(packedStore, idx, (i % 100) - 50.0);
-                packedActiveAcc.set(packedStore, idx, (i & 1) == 0);
+                packedHeightAcc.set(packedStore, idx, testHeight[i]);
+                packedTempAcc.set(packedStore, idx, testTemp[i]);
+                packedActiveAcc.set(packedStore, idx, testActive[i]);
             }
         }
     }
@@ -278,7 +398,7 @@ public class DataStoreBenchmark {
 
     @Benchmark public void packedRowViewWriteAll() {
         for (int i = 0; i < N; i++)
-            packedRowView.set(packedStore, i, new Terrain(i % 256, (i % 100) - 50.0, (i & 1) == 0));
+            packedRowView.set(packedStore, i, new Terrain(testHeight[i], testTemp[i], testActive[i]));
     }
 
     @Benchmark public void packedRowViewRandomRead(Blackhole bh) {
@@ -287,14 +407,14 @@ public class DataStoreBenchmark {
 
     @Benchmark public void packedRowViewRandomWrite() {
         for (int i = 0; i < N; i++)
-            packedRowView.set(packedStore, randIdx[i], new Terrain(i % 256, (i % 100) - 50.0, (i & 1) == 0));
+            packedRowView.set(packedStore, randIdx[i], new Terrain(testHeight[i], testTemp[i], testActive[i]));
     }
 
     @Benchmark public void packedRowViewRandomReadWrite(Blackhole bh) {
         for (int i = 0; i < N; i++) {
             int idx = randIdx[i];
             if ((i & 1) == 0) bh.consume(packedRowView.get(packedStore, idx));
-            else               packedRowView.set(packedStore, idx, new Terrain(i % 256, (i % 100) - 50.0, (i & 1) == 0));
+            else               packedRowView.set(packedStore, idx, new Terrain(testHeight[i], testTemp[i], testActive[i]));
         }
     }
 
@@ -310,7 +430,7 @@ public class DataStoreBenchmark {
     @Benchmark public void packedCursorWriteAll() {
         TerrainCursor d = packedCursor.get();
         for (int i = 0; i < N; i++) {
-            d.height = i % 256; d.temperature = (i % 100) - 50.0; d.active = (i & 1) == 0;
+            d.height = testHeight[i]; d.temperature = testTemp[i]; d.active = testActive[i];
             packedCursor.flush(packedStore, i);
         }
     }
@@ -326,7 +446,7 @@ public class DataStoreBenchmark {
         TerrainCursor d = packedCursor.get();
         for (int i = 0; i < N; i++) {
             int idx = randIdx[i];
-            d.height = i % 256; d.temperature = (i % 100) - 50.0; d.active = (i & 1) == 0;
+            d.height = testHeight[i]; d.temperature = testTemp[i]; d.active = testActive[i];
             packedCursor.flush(packedStore, idx);
         }
     }
@@ -339,7 +459,7 @@ public class DataStoreBenchmark {
                 packedCursor.load(packedStore, idx);
                 bh.consume(d.height); bh.consume(d.temperature); bh.consume(d.active);
             } else {
-                d.height = i % 256; d.temperature = (i % 100) - 50.0; d.active = (i & 1) == 0;
+                d.height = testHeight[i]; d.temperature = testTemp[i]; d.active = testActive[i];
                 packedCursor.flush(packedStore, idx);
             }
         }
@@ -363,9 +483,9 @@ public class DataStoreBenchmark {
 
     @Benchmark public void sparseWriteAll() {
         for (int i = 0; i < N; i++) {
-            sparseHeightAcc.set(sparseStore, i, i % 256);
-            sparseTempAcc.set(sparseStore, i, (i % 100) - 50.0);
-            sparseActiveAcc.set(sparseStore, i, (i & 1) == 0);
+            sparseHeightAcc.set(sparseStore, i, testHeight[i]);
+            sparseTempAcc.set(sparseStore, i, testTemp[i]);
+            sparseActiveAcc.set(sparseStore, i, testActive[i]);
         }
     }
 
@@ -381,9 +501,9 @@ public class DataStoreBenchmark {
     @Benchmark public void sparseRandomWrite() {
         for (int i = 0; i < N; i++) {
             int idx = randIdx[i];
-            sparseHeightAcc.set(sparseStore, idx, i % 256);
-            sparseTempAcc.set(sparseStore, idx, (i % 100) - 50.0);
-            sparseActiveAcc.set(sparseStore, idx, (i & 1) == 0);
+            sparseHeightAcc.set(sparseStore, idx, testHeight[i]);
+            sparseTempAcc.set(sparseStore, idx, testTemp[i]);
+            sparseActiveAcc.set(sparseStore, idx, testActive[i]);
         }
     }
 
@@ -395,9 +515,9 @@ public class DataStoreBenchmark {
                 bh.consume(sparseTempAcc.get(sparseStore, idx));
                 bh.consume(sparseActiveAcc.get(sparseStore, idx));
             } else {
-                sparseHeightAcc.set(sparseStore, idx, i % 256);
-                sparseTempAcc.set(sparseStore, idx, (i % 100) - 50.0);
-                sparseActiveAcc.set(sparseStore, idx, (i & 1) == 0);
+                sparseHeightAcc.set(sparseStore, idx, testHeight[i]);
+                sparseTempAcc.set(sparseStore, idx, testTemp[i]);
+                sparseActiveAcc.set(sparseStore, idx, testActive[i]);
             }
         }
     }
@@ -414,7 +534,7 @@ public class DataStoreBenchmark {
 
     @Benchmark public void sparseRowViewWriteAll() {
         for (int i = 0; i < N; i++)
-            sparseRowView.set(sparseStore, i, new Terrain(i % 256, (i % 100) - 50.0, (i & 1) == 0));
+            sparseRowView.set(sparseStore, i, new Terrain(testHeight[i], testTemp[i], testActive[i]));
     }
 
     @Benchmark public void sparseRowViewRandomRead(Blackhole bh) {
@@ -423,14 +543,14 @@ public class DataStoreBenchmark {
 
     @Benchmark public void sparseRowViewRandomWrite() {
         for (int i = 0; i < N; i++)
-            sparseRowView.set(sparseStore, randIdx[i], new Terrain(i % 256, (i % 100) - 50.0, (i & 1) == 0));
+            sparseRowView.set(sparseStore, randIdx[i], new Terrain(testHeight[i], testTemp[i], testActive[i]));
     }
 
     @Benchmark public void sparseRowViewRandomReadWrite(Blackhole bh) {
         for (int i = 0; i < N; i++) {
             int idx = randIdx[i];
             if ((i & 1) == 0) bh.consume(sparseRowView.get(sparseStore, idx));
-            else               sparseRowView.set(sparseStore, idx, new Terrain(i % 256, (i % 100) - 50.0, (i & 1) == 0));
+            else               sparseRowView.set(sparseStore, idx, new Terrain(testHeight[i], testTemp[i], testActive[i]));
         }
     }
 
@@ -446,7 +566,7 @@ public class DataStoreBenchmark {
     @Benchmark public void sparseCursorWriteAll() {
         TerrainCursor d = sparseCursor.get();
         for (int i = 0; i < N; i++) {
-            d.height = i % 256; d.temperature = (i % 100) - 50.0; d.active = (i & 1) == 0;
+            d.height = testHeight[i]; d.temperature = testTemp[i]; d.active = testActive[i];
             sparseCursor.flush(sparseStore, i);
         }
     }
@@ -462,7 +582,7 @@ public class DataStoreBenchmark {
         TerrainCursor d = sparseCursor.get();
         for (int i = 0; i < N; i++) {
             int idx = randIdx[i];
-            d.height = i % 256; d.temperature = (i % 100) - 50.0; d.active = (i & 1) == 0;
+            d.height = testHeight[i]; d.temperature = testTemp[i]; d.active = testActive[i];
             sparseCursor.flush(sparseStore, idx);
         }
     }
@@ -475,7 +595,7 @@ public class DataStoreBenchmark {
                 sparseCursor.load(sparseStore, idx);
                 bh.consume(d.height); bh.consume(d.temperature); bh.consume(d.active);
             } else {
-                d.height = i % 256; d.temperature = (i % 100) - 50.0; d.active = (i & 1) == 0;
+                d.height = testHeight[i]; d.temperature = testTemp[i]; d.active = testActive[i];
                 sparseCursor.flush(sparseStore, idx);
             }
         }
@@ -495,7 +615,7 @@ public class DataStoreBenchmark {
     @Benchmark public void packedCursorVhWriteAll() {
         TerrainCursor d = packedCursorVH.get();
         for (int i = 0; i < N; i++) {
-            d.height = i % 256; d.temperature = (i % 100) - 50.0; d.active = (i & 1) == 0;
+            d.height = testHeight[i]; d.temperature = testTemp[i]; d.active = testActive[i];
             packedCursorVH.flush(packedStore, i);
         }
     }
@@ -511,7 +631,7 @@ public class DataStoreBenchmark {
         TerrainCursor d = packedCursorVH.get();
         for (int i = 0; i < N; i++) {
             int idx = randIdx[i];
-            d.height = i % 256; d.temperature = (i % 100) - 50.0; d.active = (i & 1) == 0;
+            d.height = testHeight[i]; d.temperature = testTemp[i]; d.active = testActive[i];
             packedCursorVH.flush(packedStore, idx);
         }
     }
@@ -534,7 +654,7 @@ public class DataStoreBenchmark {
     @Benchmark public void sparseCursorVhWriteAll() {
         TerrainCursor d = sparseCursorVH.get();
         for (int i = 0; i < N; i++) {
-            d.height = i % 256; d.temperature = (i % 100) - 50.0; d.active = (i & 1) == 0;
+            d.height = testHeight[i]; d.temperature = testTemp[i]; d.active = testActive[i];
             sparseCursorVH.flush(sparseStore, i);
         }
     }
@@ -550,7 +670,7 @@ public class DataStoreBenchmark {
         TerrainCursor d = sparseCursorVH.get();
         for (int i = 0; i < N; i++) {
             int idx = randIdx[i];
-            d.height = i % 256; d.temperature = (i % 100) - 50.0; d.active = (i & 1) == 0;
+            d.height = testHeight[i]; d.temperature = testTemp[i]; d.active = testActive[i];
             sparseCursorVH.flush(sparseStore, idx);
         }
     }
@@ -569,18 +689,18 @@ public class DataStoreBenchmark {
 
     @Benchmark public void octreeWriteAll() {
         for (int i = 0; i < N; i++) {
-            octreeHeightAcc.set(octreeStore, octreeRows[i], i % 256);
-            octreeTempAcc.set(octreeStore, octreeRows[i], (i % 100) - 50.0);
-            octreeActiveAcc.set(octreeStore, octreeRows[i], (i & 1) == 0);
+            octreeHeightAcc.set(octreeStore, octreeRows[i], testHeight[i]);
+            octreeTempAcc.set(octreeStore, octreeRows[i], testTemp[i]);
+            octreeActiveAcc.set(octreeStore, octreeRows[i], testActive[i]);
         }
     }
 
     @Benchmark public void octreeBatchWriteAll() {
         octreeStore.beginBatch();
         for (int i = 0; i < N; i++) {
-            octreeHeightAcc.set(octreeStore, octreeRows[i], i % 256);
-            octreeTempAcc.set(octreeStore, octreeRows[i], (i % 100) - 50.0);
-            octreeActiveAcc.set(octreeStore, octreeRows[i], (i & 1) == 0);
+            octreeHeightAcc.set(octreeStore, octreeRows[i], testHeight[i]);
+            octreeTempAcc.set(octreeStore, octreeRows[i], testTemp[i]);
+            octreeActiveAcc.set(octreeStore, octreeRows[i], testActive[i]);
         }
         octreeStore.endBatch();
     }
@@ -597,9 +717,9 @@ public class DataStoreBenchmark {
     @Benchmark public void octreeRandomWrite() {
         for (int i = 0; i < N; i++) {
             int row = randOctreeRows[i];
-            octreeHeightAcc.set(octreeStore, row, i % 256);
-            octreeTempAcc.set(octreeStore, row, (i % 100) - 50.0);
-            octreeActiveAcc.set(octreeStore, row, (i & 1) == 0);
+            octreeHeightAcc.set(octreeStore, row, testHeight[i]);
+            octreeTempAcc.set(octreeStore, row, testTemp[i]);
+            octreeActiveAcc.set(octreeStore, row, testActive[i]);
         }
     }
 
@@ -611,9 +731,9 @@ public class DataStoreBenchmark {
                 bh.consume(octreeTempAcc.get(octreeStore, row));
                 bh.consume(octreeActiveAcc.get(octreeStore, row));
             } else {
-                octreeHeightAcc.set(octreeStore, row, i % 256);
-                octreeTempAcc.set(octreeStore, row, (i % 100) - 50.0);
-                octreeActiveAcc.set(octreeStore, row, (i & 1) == 0);
+                octreeHeightAcc.set(octreeStore, row, testHeight[i]);
+                octreeTempAcc.set(octreeStore, row, testTemp[i]);
+                octreeActiveAcc.set(octreeStore, row, testActive[i]);
             }
         }
     }
@@ -630,7 +750,7 @@ public class DataStoreBenchmark {
 
     @Benchmark public void octreeRowViewWriteAll() {
         for (int i = 0; i < N; i++)
-            octreeRowView.set(octreeStore, octreeRows[i], new Terrain(i % 256, (i % 100) - 50.0, (i & 1) == 0));
+            octreeRowView.set(octreeStore, octreeRows[i], new Terrain(testHeight[i], testTemp[i], testActive[i]));
     }
 
     @Benchmark public void octreeRowViewRandomRead(Blackhole bh) {
@@ -639,14 +759,14 @@ public class DataStoreBenchmark {
 
     @Benchmark public void octreeRowViewRandomWrite() {
         for (int i = 0; i < N; i++)
-            octreeRowView.set(octreeStore, randOctreeRows[i], new Terrain(i % 256, (i % 100) - 50.0, (i & 1) == 0));
+            octreeRowView.set(octreeStore, randOctreeRows[i], new Terrain(testHeight[i], testTemp[i], testActive[i]));
     }
 
     @Benchmark public void octreeRowViewRandomReadWrite(Blackhole bh) {
         for (int i = 0; i < N; i++) {
             int row = randOctreeRows[i];
             if ((i & 1) == 0) bh.consume(octreeRowView.get(octreeStore, row));
-            else               octreeRowView.set(octreeStore, row, new Terrain(i % 256, (i % 100) - 50.0, (i & 1) == 0));
+            else               octreeRowView.set(octreeStore, row, new Terrain(testHeight[i], testTemp[i], testActive[i]));
         }
     }
 
@@ -662,7 +782,7 @@ public class DataStoreBenchmark {
     @Benchmark public void octreeCursorWriteAll() {
         TerrainCursor d = octreeCursor.get();
         for (int i = 0; i < N; i++) {
-            d.height = i % 256; d.temperature = (i % 100) - 50.0; d.active = (i & 1) == 0;
+            d.height = testHeight[i]; d.temperature = testTemp[i]; d.active = testActive[i];
             octreeCursor.flush(octreeStore, octreeRows[i]);
         }
     }
@@ -677,7 +797,7 @@ public class DataStoreBenchmark {
     @Benchmark public void octreeCursorRandomWrite() {
         TerrainCursor d = octreeCursor.get();
         for (int i = 0; i < N; i++) {
-            d.height = i % 256; d.temperature = (i % 100) - 50.0; d.active = (i & 1) == 0;
+            d.height = testHeight[i]; d.temperature = testTemp[i]; d.active = testActive[i];
             octreeCursor.flush(octreeStore, randOctreeRows[i]);
         }
     }
@@ -690,7 +810,7 @@ public class DataStoreBenchmark {
                 octreeCursor.load(octreeStore, row);
                 bh.consume(d.height); bh.consume(d.temperature); bh.consume(d.active);
             } else {
-                d.height = i % 256; d.temperature = (i % 100) - 50.0; d.active = (i & 1) == 0;
+                d.height = testHeight[i]; d.temperature = testTemp[i]; d.active = testActive[i];
                 octreeCursor.flush(octreeStore, row);
             }
         }
@@ -710,18 +830,18 @@ public class DataStoreBenchmark {
 
     @Benchmark public void fastOctreeWriteAll() {
         for (int i = 0; i < N; i++) {
-            fastOctreeHeightAcc.set(fastOctreeStore, fastOctreeRows[i], i % 256);
-            fastOctreeTempAcc.set(fastOctreeStore, fastOctreeRows[i], (i % 100) - 50.0);
-            fastOctreeActiveAcc.set(fastOctreeStore, fastOctreeRows[i], (i & 1) == 0);
+            fastOctreeHeightAcc.set(fastOctreeStore, fastOctreeRows[i], testHeight[i]);
+            fastOctreeTempAcc.set(fastOctreeStore, fastOctreeRows[i], testTemp[i]);
+            fastOctreeActiveAcc.set(fastOctreeStore, fastOctreeRows[i], testActive[i]);
         }
     }
 
     @Benchmark public void fastOctreeBatchWriteAll() {
         fastOctreeStore.beginBatch();
         for (int i = 0; i < N; i++) {
-            fastOctreeHeightAcc.set(fastOctreeStore, fastOctreeRows[i], i % 256);
-            fastOctreeTempAcc.set(fastOctreeStore, fastOctreeRows[i], (i % 100) - 50.0);
-            fastOctreeActiveAcc.set(fastOctreeStore, fastOctreeRows[i], (i & 1) == 0);
+            fastOctreeHeightAcc.set(fastOctreeStore, fastOctreeRows[i], testHeight[i]);
+            fastOctreeTempAcc.set(fastOctreeStore, fastOctreeRows[i], testTemp[i]);
+            fastOctreeActiveAcc.set(fastOctreeStore, fastOctreeRows[i], testActive[i]);
         }
         fastOctreeStore.endBatch();
     }
@@ -738,9 +858,9 @@ public class DataStoreBenchmark {
     @Benchmark public void fastOctreeRandomWrite() {
         for (int i = 0; i < N; i++) {
             int row = randFastOctreeRows[i];
-            fastOctreeHeightAcc.set(fastOctreeStore, row, i % 256);
-            fastOctreeTempAcc.set(fastOctreeStore, row, (i % 100) - 50.0);
-            fastOctreeActiveAcc.set(fastOctreeStore, row, (i & 1) == 0);
+            fastOctreeHeightAcc.set(fastOctreeStore, row, testHeight[i]);
+            fastOctreeTempAcc.set(fastOctreeStore, row, testTemp[i]);
+            fastOctreeActiveAcc.set(fastOctreeStore, row, testActive[i]);
         }
     }
 
@@ -752,9 +872,9 @@ public class DataStoreBenchmark {
                 bh.consume(fastOctreeTempAcc.get(fastOctreeStore, row));
                 bh.consume(fastOctreeActiveAcc.get(fastOctreeStore, row));
             } else {
-                fastOctreeHeightAcc.set(fastOctreeStore, row, i % 256);
-                fastOctreeTempAcc.set(fastOctreeStore, row, (i % 100) - 50.0);
-                fastOctreeActiveAcc.set(fastOctreeStore, row, (i & 1) == 0);
+                fastOctreeHeightAcc.set(fastOctreeStore, row, testHeight[i]);
+                fastOctreeTempAcc.set(fastOctreeStore, row, testTemp[i]);
+                fastOctreeActiveAcc.set(fastOctreeStore, row, testActive[i]);
             }
         }
     }
@@ -771,7 +891,7 @@ public class DataStoreBenchmark {
 
     @Benchmark public void fastOctreeRowViewWriteAll() {
         for (int i = 0; i < N; i++)
-            fastOctreeRowView.set(fastOctreeStore, fastOctreeRows[i], new Terrain(i % 256, (i % 100) - 50.0, (i & 1) == 0));
+            fastOctreeRowView.set(fastOctreeStore, fastOctreeRows[i], new Terrain(testHeight[i], testTemp[i], testActive[i]));
     }
 
     @Benchmark public void fastOctreeRowViewRandomRead(Blackhole bh) {
@@ -780,14 +900,14 @@ public class DataStoreBenchmark {
 
     @Benchmark public void fastOctreeRowViewRandomWrite() {
         for (int i = 0; i < N; i++)
-            fastOctreeRowView.set(fastOctreeStore, randFastOctreeRows[i], new Terrain(i % 256, (i % 100) - 50.0, (i & 1) == 0));
+            fastOctreeRowView.set(fastOctreeStore, randFastOctreeRows[i], new Terrain(testHeight[i], testTemp[i], testActive[i]));
     }
 
     @Benchmark public void fastOctreeRowViewRandomReadWrite(Blackhole bh) {
         for (int i = 0; i < N; i++) {
             int row = randFastOctreeRows[i];
             if ((i & 1) == 0) bh.consume(fastOctreeRowView.get(fastOctreeStore, row));
-            else               fastOctreeRowView.set(fastOctreeStore, row, new Terrain(i % 256, (i % 100) - 50.0, (i & 1) == 0));
+            else               fastOctreeRowView.set(fastOctreeStore, row, new Terrain(testHeight[i], testTemp[i], testActive[i]));
         }
     }
 
@@ -803,7 +923,7 @@ public class DataStoreBenchmark {
     @Benchmark public void fastOctreeCursorWriteAll() {
         TerrainCursor d = fastOctreeCursor.get();
         for (int i = 0; i < N; i++) {
-            d.height = i % 256; d.temperature = (i % 100) - 50.0; d.active = (i & 1) == 0;
+            d.height = testHeight[i]; d.temperature = testTemp[i]; d.active = testActive[i];
             fastOctreeCursor.flush(fastOctreeStore, fastOctreeRows[i]);
         }
     }
@@ -818,7 +938,7 @@ public class DataStoreBenchmark {
     @Benchmark public void fastOctreeCursorRandomWrite() {
         TerrainCursor d = fastOctreeCursor.get();
         for (int i = 0; i < N; i++) {
-            d.height = i % 256; d.temperature = (i % 100) - 50.0; d.active = (i & 1) == 0;
+            d.height = testHeight[i]; d.temperature = testTemp[i]; d.active = testActive[i];
             fastOctreeCursor.flush(fastOctreeStore, randFastOctreeRows[i]);
         }
     }
@@ -831,7 +951,7 @@ public class DataStoreBenchmark {
                 fastOctreeCursor.load(fastOctreeStore, row);
                 bh.consume(d.height); bh.consume(d.temperature); bh.consume(d.active);
             } else {
-                d.height = i % 256; d.temperature = (i % 100) - 50.0; d.active = (i & 1) == 0;
+                d.height = testHeight[i]; d.temperature = testTemp[i]; d.active = testActive[i];
                 fastOctreeCursor.flush(fastOctreeStore, row);
             }
         }
@@ -851,9 +971,9 @@ public class DataStoreBenchmark {
 
     @Benchmark public void baselineWriteAll() {
         for (int i = 0; i < N; i++) {
-            baselineHeight[i] = i % 256;
-            baselineTemp[i]   = (i % 100) - 50.0;
-            baselineActive[i] = (i & 1) == 0;
+            baselineHeight[i] = testHeight[i];
+            baselineTemp[i]   = testTemp[i];
+            baselineActive[i] = testActive[i];
         }
     }
 
@@ -869,9 +989,9 @@ public class DataStoreBenchmark {
     @Benchmark public void baselineRandomWrite() {
         for (int i = 0; i < N; i++) {
             int idx = randIdx[i];
-            baselineHeight[idx] = i % 256;
-            baselineTemp[idx]   = (i % 100) - 50.0;
-            baselineActive[idx] = (i & 1) == 0;
+            baselineHeight[idx] = testHeight[i];
+            baselineTemp[idx]   = testTemp[i];
+            baselineActive[idx] = testActive[i];
         }
     }
 
@@ -883,9 +1003,9 @@ public class DataStoreBenchmark {
                 bh.consume(baselineTemp[idx]);
                 bh.consume(baselineActive[idx]);
             } else {
-                baselineHeight[idx] = i % 256;
-                baselineTemp[idx]   = (i % 100) - 50.0;
-                baselineActive[idx] = (i & 1) == 0;
+                baselineHeight[idx] = testHeight[i];
+                baselineTemp[idx]   = testTemp[i];
+                baselineActive[idx] = testActive[i];
             }
         }
     }
@@ -909,7 +1029,7 @@ public class DataStoreBenchmark {
 
     @Benchmark public void hashmapWriteAll() {
         for (int i = 0; i < N; i++)
-            hashmapStore.put(i, new Object[]{i % 256, (i % 100) - 50.0, (i & 1) == 0});
+            hashmapStore.put(i, new Object[]{testHeight[i], testTemp[i], testActive[i]});
     }
 
     @Benchmark public void hashmapRandomRead(Blackhole bh) {
@@ -923,7 +1043,7 @@ public class DataStoreBenchmark {
 
     @Benchmark public void hashmapRandomWrite() {
         for (int i = 0; i < N; i++)
-            hashmapStore.put(randIdx[i], new Object[]{i % 256, (i % 100) - 50.0, (i & 1) == 0});
+            hashmapStore.put(randIdx[i], new Object[]{testHeight[i], testTemp[i], testActive[i]});
     }
 
     @Benchmark public void hashmapRandomReadWrite(Blackhole bh) {
@@ -935,12 +1055,295 @@ public class DataStoreBenchmark {
                 bh.consume((double) row[1]);
                 bh.consume((boolean) row[2]);
             } else {
-                hashmapStore.put(idx, new Object[]{i % 256, (i % 100) - 50.0, (i & 1) == 0});
+                hashmapStore.put(idx, new Object[]{testHeight[i], testTemp[i], testActive[i]});
             }
         }
     }
 
     @Benchmark public int hashmapReadSingle() {
         return (int) hashmapStore.get(N / 2)[0];
+    }
+
+    // ====================================================================
+    // MULTI-COMPONENT — baseline: 5 parallel primitive arrays (Terrain + Water)
+    // ====================================================================
+
+    @Benchmark public void multiBaselineReadAll(Blackhole bh) {
+        for (int i = 0; i < N; i++) {
+            bh.consume(multiBaselineHeight[i]);
+            bh.consume(multiBaselineTemp[i]);
+            bh.consume(multiBaselineActive[i]);
+            bh.consume(multiBaselineSalinity[i]);
+            bh.consume(multiBaselineFrozen[i]);
+        }
+    }
+
+    @Benchmark public void multiBaselineWriteAll() {
+        for (int i = 0; i < N; i++) {
+            multiBaselineHeight[i]   = testHeight[i];
+            multiBaselineTemp[i]     = testTemp[i];
+            multiBaselineActive[i]   = testActive[i];
+            multiBaselineSalinity[i] = testSalinity[i];
+            multiBaselineFrozen[i]   = testFrozen[i];
+        }
+    }
+
+    @Benchmark public void multiBaselineRandomRead(Blackhole bh) {
+        for (int i = 0; i < N; i++) {
+            int idx = randIdx[i];
+            bh.consume(multiBaselineHeight[idx]);
+            bh.consume(multiBaselineTemp[idx]);
+            bh.consume(multiBaselineActive[idx]);
+            bh.consume(multiBaselineSalinity[idx]);
+            bh.consume(multiBaselineFrozen[idx]);
+        }
+    }
+
+    @Benchmark public void multiBaselineRandomWrite() {
+        for (int i = 0; i < N; i++) {
+            int idx = randIdx[i];
+            multiBaselineHeight[idx]   = testHeight[i];
+            multiBaselineTemp[idx]     = testTemp[i];
+            multiBaselineActive[idx]   = testActive[i];
+            multiBaselineSalinity[idx] = testSalinity[i];
+            multiBaselineFrozen[idx]   = testFrozen[i];
+        }
+    }
+
+    @Benchmark public void multiBaselineRandomReadWrite(Blackhole bh) {
+        for (int i = 0; i < N; i++) {
+            int idx = randIdx[i];
+            if ((i & 1) == 0) {
+                bh.consume(multiBaselineHeight[idx]);
+                bh.consume(multiBaselineTemp[idx]);
+                bh.consume(multiBaselineActive[idx]);
+                bh.consume(multiBaselineSalinity[idx]);
+                bh.consume(multiBaselineFrozen[idx]);
+            } else {
+                multiBaselineHeight[idx]   = testHeight[i];
+                multiBaselineTemp[idx]     = testTemp[i];
+                multiBaselineActive[idx]   = testActive[i];
+                multiBaselineSalinity[idx] = testSalinity[i];
+                multiBaselineFrozen[idx]   = testFrozen[i];
+            }
+        }
+    }
+
+    // ====================================================================
+    // MULTI-COMPONENT — packed DataCursor (Terrain + Water via WorldCursor)
+    // ====================================================================
+
+    @Benchmark public void multiPackedCursorReadAll(Blackhole bh) {
+        for (int i = 0; i < N; i++) {
+            WorldCursor d = multiPackedCursor.update(multiPackedStore, i);
+            bh.consume(d.height); bh.consume(d.temperature); bh.consume(d.active);
+            bh.consume(d.salinity); bh.consume(d.frozen);
+        }
+    }
+
+    @Benchmark public void multiPackedCursorWriteAll() {
+        WorldCursor d = multiPackedCursor.get();
+        for (int i = 0; i < N; i++) {
+            d.height = testHeight[i]; d.temperature = testTemp[i]; d.active = testActive[i];
+            d.salinity = testSalinity[i]; d.frozen = testFrozen[i];
+            multiPackedCursor.flush(multiPackedStore, i);
+        }
+    }
+
+    @Benchmark public void multiPackedCursorRandomRead(Blackhole bh) {
+        for (int i = 0; i < N; i++) {
+            WorldCursor d = multiPackedCursor.update(multiPackedStore, randIdx[i]);
+            bh.consume(d.height); bh.consume(d.temperature); bh.consume(d.active);
+            bh.consume(d.salinity); bh.consume(d.frozen);
+        }
+    }
+
+    @Benchmark public void multiPackedCursorRandomWrite() {
+        WorldCursor d = multiPackedCursor.get();
+        for (int i = 0; i < N; i++) {
+            int idx = randIdx[i];
+            d.height = testHeight[i]; d.temperature = testTemp[i]; d.active = testActive[i];
+            d.salinity = testSalinity[i]; d.frozen = testFrozen[i];
+            multiPackedCursor.flush(multiPackedStore, idx);
+        }
+    }
+
+    @Benchmark public void multiPackedCursorRandomReadWrite(Blackhole bh) {
+        WorldCursor d = multiPackedCursor.get();
+        for (int i = 0; i < N; i++) {
+            int idx = randIdx[i];
+            if ((i & 1) == 0) {
+                multiPackedCursor.load(multiPackedStore, idx);
+                bh.consume(d.height); bh.consume(d.temperature); bh.consume(d.active);
+                bh.consume(d.salinity); bh.consume(d.frozen);
+            } else {
+                d.height = testHeight[i]; d.temperature = testTemp[i]; d.active = testActive[i];
+                d.salinity = testSalinity[i]; d.frozen = testFrozen[i];
+                multiPackedCursor.flush(multiPackedStore, idx);
+            }
+        }
+    }
+
+    // ====================================================================
+    // MULTI-COMPONENT — sparse DataCursor (Terrain + Water via WorldCursor)
+    // ====================================================================
+
+    @Benchmark public void multiSparseCursorReadAll(Blackhole bh) {
+        for (int i = 0; i < N; i++) {
+            WorldCursor d = multiSparseCursor.update(multiSparseStore, i);
+            bh.consume(d.height); bh.consume(d.temperature); bh.consume(d.active);
+            bh.consume(d.salinity); bh.consume(d.frozen);
+        }
+    }
+
+    @Benchmark public void multiSparseCursorWriteAll() {
+        WorldCursor d = multiSparseCursor.get();
+        for (int i = 0; i < N; i++) {
+            d.height = testHeight[i]; d.temperature = testTemp[i]; d.active = testActive[i];
+            d.salinity = testSalinity[i]; d.frozen = testFrozen[i];
+            multiSparseCursor.flush(multiSparseStore, i);
+        }
+    }
+
+    @Benchmark public void multiSparseCursorRandomRead(Blackhole bh) {
+        for (int i = 0; i < N; i++) {
+            WorldCursor d = multiSparseCursor.update(multiSparseStore, randIdx[i]);
+            bh.consume(d.height); bh.consume(d.temperature); bh.consume(d.active);
+            bh.consume(d.salinity); bh.consume(d.frozen);
+        }
+    }
+
+    @Benchmark public void multiSparseCursorRandomWrite() {
+        WorldCursor d = multiSparseCursor.get();
+        for (int i = 0; i < N; i++) {
+            int idx = randIdx[i];
+            d.height = testHeight[i]; d.temperature = testTemp[i]; d.active = testActive[i];
+            d.salinity = testSalinity[i]; d.frozen = testFrozen[i];
+            multiSparseCursor.flush(multiSparseStore, idx);
+        }
+    }
+
+    @Benchmark public void multiSparseCursorRandomReadWrite(Blackhole bh) {
+        WorldCursor d = multiSparseCursor.get();
+        for (int i = 0; i < N; i++) {
+            int idx = randIdx[i];
+            if ((i & 1) == 0) {
+                multiSparseCursor.load(multiSparseStore, idx);
+                bh.consume(d.height); bh.consume(d.temperature); bh.consume(d.active);
+                bh.consume(d.salinity); bh.consume(d.frozen);
+            } else {
+                d.height = testHeight[i]; d.temperature = testTemp[i]; d.active = testActive[i];
+                d.salinity = testSalinity[i]; d.frozen = testFrozen[i];
+                multiSparseCursor.flush(multiSparseStore, idx);
+            }
+        }
+    }
+
+    // ====================================================================
+    // MULTI-COMPONENT — octree DataCursor (Terrain + Water via WorldCursor)
+    // ====================================================================
+
+    @Benchmark public void multiOctreeCursorReadAll(Blackhole bh) {
+        for (int i = 0; i < N; i++) {
+            WorldCursor d = multiOctreeCursor.update(multiOctreeStore, multiOctreeRows[i]);
+            bh.consume(d.height); bh.consume(d.temperature); bh.consume(d.active);
+            bh.consume(d.salinity); bh.consume(d.frozen);
+        }
+    }
+
+    @Benchmark public void multiOctreeCursorWriteAll() {
+        WorldCursor d = multiOctreeCursor.get();
+        for (int i = 0; i < N; i++) {
+            d.height = testHeight[i]; d.temperature = testTemp[i]; d.active = testActive[i];
+            d.salinity = testSalinity[i]; d.frozen = testFrozen[i];
+            multiOctreeCursor.flush(multiOctreeStore, multiOctreeRows[i]);
+        }
+    }
+
+    @Benchmark public void multiOctreeCursorRandomRead(Blackhole bh) {
+        for (int i = 0; i < N; i++) {
+            WorldCursor d = multiOctreeCursor.update(multiOctreeStore, randMultiOctreeRows[i]);
+            bh.consume(d.height); bh.consume(d.temperature); bh.consume(d.active);
+            bh.consume(d.salinity); bh.consume(d.frozen);
+        }
+    }
+
+    @Benchmark public void multiOctreeCursorRandomWrite() {
+        WorldCursor d = multiOctreeCursor.get();
+        for (int i = 0; i < N; i++) {
+            d.height = testHeight[i]; d.temperature = testTemp[i]; d.active = testActive[i];
+            d.salinity = testSalinity[i]; d.frozen = testFrozen[i];
+            multiOctreeCursor.flush(multiOctreeStore, randMultiOctreeRows[i]);
+        }
+    }
+
+    @Benchmark public void multiOctreeCursorRandomReadWrite(Blackhole bh) {
+        WorldCursor d = multiOctreeCursor.get();
+        for (int i = 0; i < N; i++) {
+            int row = randMultiOctreeRows[i];
+            if ((i & 1) == 0) {
+                multiOctreeCursor.load(multiOctreeStore, row);
+                bh.consume(d.height); bh.consume(d.temperature); bh.consume(d.active);
+                bh.consume(d.salinity); bh.consume(d.frozen);
+            } else {
+                d.height = testHeight[i]; d.temperature = testTemp[i]; d.active = testActive[i];
+                d.salinity = testSalinity[i]; d.frozen = testFrozen[i];
+                multiOctreeCursor.flush(multiOctreeStore, row);
+            }
+        }
+    }
+
+    // ====================================================================
+    // MULTI-COMPONENT — fast octree DataCursor (Terrain + Water via WorldCursor)
+    // ====================================================================
+
+    @Benchmark public void multiFastOctreeCursorReadAll(Blackhole bh) {
+        for (int i = 0; i < N; i++) {
+            WorldCursor d = multiFastOctreeCursor.update(multiFastOctreeStore, multiFastOctreeRows[i]);
+            bh.consume(d.height); bh.consume(d.temperature); bh.consume(d.active);
+            bh.consume(d.salinity); bh.consume(d.frozen);
+        }
+    }
+
+    @Benchmark public void multiFastOctreeCursorWriteAll() {
+        WorldCursor d = multiFastOctreeCursor.get();
+        for (int i = 0; i < N; i++) {
+            d.height = testHeight[i]; d.temperature = testTemp[i]; d.active = testActive[i];
+            d.salinity = testSalinity[i]; d.frozen = testFrozen[i];
+            multiFastOctreeCursor.flush(multiFastOctreeStore, multiFastOctreeRows[i]);
+        }
+    }
+
+    @Benchmark public void multiFastOctreeCursorRandomRead(Blackhole bh) {
+        for (int i = 0; i < N; i++) {
+            WorldCursor d = multiFastOctreeCursor.update(multiFastOctreeStore, randMultiFastOctreeRows[i]);
+            bh.consume(d.height); bh.consume(d.temperature); bh.consume(d.active);
+            bh.consume(d.salinity); bh.consume(d.frozen);
+        }
+    }
+
+    @Benchmark public void multiFastOctreeCursorRandomWrite() {
+        WorldCursor d = multiFastOctreeCursor.get();
+        for (int i = 0; i < N; i++) {
+            d.height = testHeight[i]; d.temperature = testTemp[i]; d.active = testActive[i];
+            d.salinity = testSalinity[i]; d.frozen = testFrozen[i];
+            multiFastOctreeCursor.flush(multiFastOctreeStore, randMultiFastOctreeRows[i]);
+        }
+    }
+
+    @Benchmark public void multiFastOctreeCursorRandomReadWrite(Blackhole bh) {
+        WorldCursor d = multiFastOctreeCursor.get();
+        for (int i = 0; i < N; i++) {
+            int row = randMultiFastOctreeRows[i];
+            if ((i & 1) == 0) {
+                multiFastOctreeCursor.load(multiFastOctreeStore, row);
+                bh.consume(d.height); bh.consume(d.temperature); bh.consume(d.active);
+                bh.consume(d.salinity); bh.consume(d.frozen);
+            } else {
+                d.height = testHeight[i]; d.temperature = testTemp[i]; d.active = testActive[i];
+                d.salinity = testSalinity[i]; d.frozen = testFrozen[i];
+                multiFastOctreeCursor.flush(multiFastOctreeStore, row);
+            }
+        }
     }
 }
