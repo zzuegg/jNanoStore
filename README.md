@@ -306,6 +306,59 @@ For a 1 024 × 256 × 1 024 world (~268 million voxels, 23-bit `Terrain` record)
 
 ---
 
+## Installation
+
+BitKit is published to [GitHub Packages](https://github.com/zzuegg/BitKit/packages).
+
+### Gradle (Kotlin DSL)
+
+Add the GitHub Packages repository and the dependency to your `build.gradle.kts`:
+
+```kotlin
+repositories {
+    maven {
+        url = uri("https://maven.pkg.github.com/zzuegg/BitKit")
+        credentials {
+            username = project.findProperty("gpr.user") as String? ?: System.getenv("GITHUB_ACTOR")
+            password = project.findProperty("gpr.key") as String? ?: System.getenv("GITHUB_TOKEN")
+        }
+    }
+}
+
+dependencies {
+    implementation("io.github.zzuegg:jbinary:0.1.0")
+}
+```
+
+GitHub Packages requires authentication even for public packages.
+You need a [personal access token](https://github.com/settings/tokens) with the `read:packages` scope.
+Store it in `~/.gradle/gradle.properties`:
+
+```properties
+gpr.user=YOUR_GITHUB_USERNAME
+gpr.key=YOUR_PERSONAL_ACCESS_TOKEN
+```
+
+### Gradle (Groovy DSL)
+
+```groovy
+repositories {
+    maven {
+        url = uri("https://maven.pkg.github.com/zzuegg/BitKit")
+        credentials {
+            username = project.findProperty("gpr.user") ?: System.getenv("GITHUB_ACTOR")
+            password = project.findProperty("gpr.key") ?: System.getenv("GITHUB_TOKEN")
+        }
+    }
+}
+
+dependencies {
+    implementation 'io.github.zzuegg:jbinary:0.1.0'
+}
+```
+
+---
+
 ## Building and testing
 
 ```bash
