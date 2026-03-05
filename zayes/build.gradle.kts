@@ -16,6 +16,7 @@ repositories {
 }
 
 dependencies {
+    implementation(project(":core"))
     implementation(libs.zayes)
 
     testImplementation(libs.zayes)
