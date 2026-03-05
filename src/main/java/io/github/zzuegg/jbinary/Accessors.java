@@ -61,6 +61,11 @@ public final class Accessors {
         return new DoubleAccessor(fl.bitOffset(), fl.bitWidth(), fl.minRaw(), fl.scale());
     }
 
+    public static FloatAccessor floatField(Class<?> component, String fieldName) {
+        FieldLayout fl = layout(component, fieldName);
+        return new FloatAccessor(fl.bitOffset(), fl.bitWidth(), fl.minRaw(), fl.scale());
+    }
+
     public static BoolAccessor boolField(Class<?> component, String fieldName) {
         FieldLayout fl = layout(component, fieldName);
         return new BoolAccessor(fl.bitOffset());
@@ -98,6 +103,12 @@ public final class Accessors {
         FieldLayout fl = layout(component, fieldName);
         int abs = store.componentBitOffset(component) + fl.bitOffset();
         return new DoubleAccessor(abs, fl.bitWidth(), fl.minRaw(), fl.scale());
+    }
+
+    public static FloatAccessor floatFieldInStore(DataStore<?> store, Class<?> component, String fieldName) {
+        FieldLayout fl = layout(component, fieldName);
+        int abs = store.componentBitOffset(component) + fl.bitOffset();
+        return new FloatAccessor(abs, fl.bitWidth(), fl.minRaw(), fl.scale());
     }
 
     public static BoolAccessor boolFieldInStore(DataStore<?> store, Class<?> component, String fieldName) {

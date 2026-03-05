@@ -1,6 +1,7 @@
 package io.github.zzuegg.jbinary;
 
 import io.github.zzuegg.jbinary.accessor.DoubleAccessor;
+import io.github.zzuegg.jbinary.accessor.FloatAccessor;
 import io.github.zzuegg.jbinary.accessor.IntAccessor;
 import io.github.zzuegg.jbinary.annotation.*;
 import org.junit.jupiter.api.Test;
@@ -144,12 +145,12 @@ class ComposedFieldTest {
 
     @Test
     void floatSubFieldRoundTrip() {
-        // EntityFloat uses Vec3f with float sub-fields
+        // EntityFloat uses Vec3f with float sub-fields — use FloatAccessor
         DataStore<?> store = DataStore.packed(10, EntityFloat.class);
 
-        DoubleAccessor posX = Accessors.doubleFieldInStore(store, EntityFloat.class, "position.x");
-        posX.set(store, 0, 12.34);
-        assertEquals(12.34, posX.get(store, 0), 0.01);
+        FloatAccessor posX = Accessors.floatFieldInStore(store, EntityFloat.class, "position.x");
+        posX.set(store, 0, 12.34f);
+        assertEquals(12.34f, posX.get(store, 0), 0.01f);
     }
 
     // ------------------------------------------------------------------ RowView tests
