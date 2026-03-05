@@ -161,6 +161,10 @@ final class CursorCodecGenerator {
             spec.vh().set(inst, a.get(store, row));
         } else if (acc instanceof io.github.zzuegg.jbinary.accessor.BoolAccessor a) {
             spec.vh().set(inst, a.get(store, row));
+        } else if (acc instanceof io.github.zzuegg.jbinary.accessor.FloatBitsAccessor a) {
+            spec.vh().set(inst, a.get(store, row));
+        } else if (acc instanceof io.github.zzuegg.jbinary.accessor.DoubleBitsAccessor a) {
+            spec.vh().set(inst, a.get(store, row));
         } else if (acc instanceof io.github.zzuegg.jbinary.accessor.StringAccessor a) {
             spec.vh().set(inst, a.get(store, row));
         } else if (acc instanceof io.github.zzuegg.jbinary.accessor.EnumAccessor<?> a) {
@@ -189,6 +193,10 @@ final class CursorCodecGenerator {
             a.set(store, row, (boolean) spec.vh().get(inst));
         } else if (acc instanceof io.github.zzuegg.jbinary.accessor.StringAccessor a) {
             a.set(store, row, (String) spec.vh().get(inst));
+        } else if (acc instanceof io.github.zzuegg.jbinary.accessor.FloatBitsAccessor a) {
+            a.set(store, row, (float) spec.vh().get(inst));
+        } else if (acc instanceof io.github.zzuegg.jbinary.accessor.DoubleBitsAccessor a) {
+            a.set(store, row, (double) spec.vh().get(inst));
         } else if (acc instanceof io.github.zzuegg.jbinary.accessor.EnumAccessor a) {
             a.set(store, row, (Enum) spec.vh().get(inst));
         }

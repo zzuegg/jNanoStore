@@ -198,12 +198,28 @@ final class RecordRowView<T extends Record> implements RowView<T> {
                 public void set(DataStore s, int r, Object v) { acc.set(s, r, (Long) v); }
             };
         } else if (type == double.class) {
+            if (fl.scale() == 0) {
+                // scale=0 means raw IEEE 754 bits (unannotated field or explicit raw storage)
+                DoubleBitsAccessor acc = new DoubleBitsAccessor(absOffset);
+                return new FieldAccessor() {
+                    public Object get(DataStore s, int r) { return acc.get(s, r); }
+                    public void set(DataStore s, int r, Object v) { acc.set(s, r, (Double) v); }
+                };
+            }
             DoubleAccessor acc = new DoubleAccessor(absOffset, fl.bitWidth(), fl.minRaw(), fl.scale());
             return new FieldAccessor() {
                 public Object get(DataStore s, int r) { return acc.get(s, r); }
                 public void set(DataStore s, int r, Object v) { acc.set(s, r, (Double) v); }
             };
         } else if (type == float.class) {
+            if (fl.scale() == 0) {
+                // scale=0 means raw IEEE 754 bits (unannotated field or explicit raw storage)
+                FloatBitsAccessor acc = new FloatBitsAccessor(absOffset);
+                return new FieldAccessor() {
+                    public Object get(DataStore s, int r) { return acc.get(s, r); }
+                    public void set(DataStore s, int r, Object v) { acc.set(s, r, (Float) v); }
+                };
+            }
             FloatAccessor acc = new FloatAccessor(absOffset, fl.bitWidth(), fl.minRaw(), fl.scale());
             return new FieldAccessor() {
                 public Object get(DataStore s, int r) { return acc.get(s, r); }

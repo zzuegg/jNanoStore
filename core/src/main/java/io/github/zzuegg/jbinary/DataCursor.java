@@ -256,9 +256,11 @@ public final class DataCursor<T> {
             return new LongAccessor(absOffset, fl.bitWidth(), fl.minRaw());
         }
         if (type == float.class) {
+            if (fl.scale() == 0) return new FloatBitsAccessor(absOffset);
             return new FloatAccessor(absOffset, fl.bitWidth(), fl.minRaw(), fl.scale());
         }
         if (type == double.class) {
+            if (fl.scale() == 0) return new DoubleBitsAccessor(absOffset);
             return new DoubleAccessor(absOffset, fl.bitWidth(), fl.minRaw(), fl.scale());
         }
         if (type == boolean.class) {

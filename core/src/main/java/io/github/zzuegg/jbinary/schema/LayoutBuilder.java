@@ -177,8 +177,54 @@ public final class LayoutBuilder {
         if (e.stringField() != null) {
             return buildStringFieldLayout(e, bitCursor);
         }
+        // No annotation present: infer full-precision native layout from the field's Java type.
+        return buildNativeFieldLayout(e, bitCursor);
+    }
+
+    /**
+     * Infers a "full precision" {@link FieldLayout} from the raw Java type when a field
+     * carries no bit-packing annotation.
+     *
+     * <ul>
+     *   <li>{@code boolean} → 1 bit</li>
+     *   <li>{@code byte}    → 8 bits, signed, min = {@link Byte#MIN_VALUE}</li>
+     *   <li>{@code short}   → 16 bits, signed, min = {@link Short#MIN_VALUE}</li>
+     *   <li>{@code char}    → 16 bits, unsigned, min = 0</li>
+     *   <li>{@code int}     → 32 bits, signed, min = {@link Integer#MIN_VALUE}</li>
+     *   <li>{@code long}    → 64 bits (full range, stored as raw bits, min = 0)</li>
+     *   <li>{@code float}   → 32 bits, raw IEEE 754 bits (scale = 0 sentinel)</li>
+     *   <li>{@code double}  → 64 bits, raw IEEE 754 bits (scale = 0 sentinel)</li>
+     *   <li>enum (no annotation) → ordinal range</li>
+     * </ul>
+     *
+     * <p>A {@code scale} of {@code 0} in the resulting {@link FieldLayout} serves as a
+     * sentinel meaning "raw IEEE 754 bit pattern" for {@code float} and {@code double}
+     * fields.  {@link io.github.zzuegg.jbinary.RowView} and
+     * {@link io.github.zzuegg.jbinary.accessor.FloatBitsAccessor} /
+     * {@link io.github.zzuegg.jbinary.accessor.DoubleBitsAccessor} honour this convention.</p>
+     */
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    private static FieldLayout buildNativeFieldLayout(FieldEntry e, int bitCursor) {
+        Class<?> t = e.type();
+        if (t == boolean.class)  return new FieldLayout(e.name(), bitCursor, 1,  0L, 1L);  // scale=1 matches @BoolField convention; BoolAccessor ignores scale
+        if (t == byte.class)     return new FieldLayout(e.name(), bitCursor, 8,  Byte.MIN_VALUE,  1L);
+        if (t == short.class)    return new FieldLayout(e.name(), bitCursor, 16, Short.MIN_VALUE, 1L);
+        if (t == char.class)     return new FieldLayout(e.name(), bitCursor, 16, 0L, 1L);
+        if (t == int.class)      return new FieldLayout(e.name(), bitCursor, 32, Integer.MIN_VALUE, 1L);
+        if (t == long.class)     return new FieldLayout(e.name(), bitCursor, 64, 0L, 1L);
+        // float / double: scale = 0 is the "raw IEEE 754 bits" sentinel
+        if (t == float.class)    return new FieldLayout(e.name(), bitCursor, 32, 0L, 0L);
+        if (t == double.class)   return new FieldLayout(e.name(), bitCursor, 64, 0L, 0L);
+        if (t.isEnum()) {
+            Object[] constants = t.getEnumConstants();
+            int maxCode = constants.length - 1;
+            int bits = maxCode <= 0 ? 1 : bitsRequired(maxCode);
+            return new FieldLayout(e.name(), bitCursor, bits, 0L, 1L);
+        }
         throw new IllegalArgumentException(
-                "Field '" + e.name() + "' has no jBinary annotation");
+                "Field '" + e.name() + "' has no jBinary annotation and its type (" +
+                t.getName() + ") cannot be inferred automatically. " +
+                "Annotate the field or use a supported primitive type.");
     }
 
     private static FieldLayout buildBitFieldLayout(FieldEntry e, int bitCursor) {
