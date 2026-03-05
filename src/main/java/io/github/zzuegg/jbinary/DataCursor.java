@@ -124,7 +124,9 @@ public final class DataCursor<T> {
      *
      * <p>Every field in {@code T} annotated with {@link StoreField} must:
      * <ul>
-     *   <li>be a public (or at least accessible) non-final, non-static primitive or enum field</li>
+     *   <li>be a public (or at least accessible) non-final, non-static field of a supported type
+ *       ({@code int}, {@code byte}, {@code short}, {@code char}, {@code long}, {@code float},
+ *       {@code double}, {@code boolean}, {@link String}, or an {@code enum})</li>
      *   <li>reference a component type registered in {@code store}</li>
      *   <li>name a field that exists in that component type</li>
      * </ul>
@@ -241,8 +243,20 @@ public final class DataCursor<T> {
         if (type == int.class) {
             return new IntAccessor(absOffset, fl.bitWidth(), fl.minRaw());
         }
+        if (type == byte.class) {
+            return new ByteAccessor(absOffset, fl.bitWidth(), fl.minRaw());
+        }
+        if (type == short.class) {
+            return new ShortAccessor(absOffset, fl.bitWidth(), fl.minRaw());
+        }
+        if (type == char.class) {
+            return new CharAccessor(absOffset, fl.bitWidth(), fl.minRaw());
+        }
         if (type == long.class) {
             return new LongAccessor(absOffset, fl.bitWidth(), fl.minRaw());
+        }
+        if (type == float.class) {
+            return new FloatAccessor(absOffset, fl.bitWidth(), fl.minRaw(), fl.scale());
         }
         if (type == double.class) {
             return new DoubleAccessor(absOffset, fl.bitWidth(), fl.minRaw(), fl.scale());
@@ -250,31 +264,69 @@ public final class DataCursor<T> {
         if (type == boolean.class) {
             return new BoolAccessor(absOffset);
         }
+        if (type == String.class) {
+            return new StringAccessor(absOffset, (int) fl.minRaw(), (int) fl.scale());
+        }
         if (type.isEnum()) {
-            // Look up @EnumField on the component's field (not the cursor field)
-            boolean explicit = false;
-            try {
-                // Try record component first
-                for (java.lang.reflect.RecordComponent rc : compClass.getRecordComponents()) {
-                    if (rc.getName().equals(fl.name())) {
-                        EnumField enumAnn = rc.getAnnotation(EnumField.class);
-                        if (enumAnn != null) explicit = enumAnn.useExplicitCodes();
-                        break;
-                    }
-                }
-            } catch (Exception ignored) {
-                // Non-record component: try declared field
-                try {
-                    java.lang.reflect.Field compField = compClass.getDeclaredField(fl.name());
-                    EnumField enumAnn = compField.getAnnotation(EnumField.class);
-                    if (enumAnn != null) explicit = enumAnn.useExplicitCodes();
-                } catch (NoSuchFieldException ignored2) {}
-            }
+            // Look up @EnumField on the component's field (not the cursor field).
+            // fl.name() may be a dotted path (e.g. "position.biome") for composed records.
+            boolean explicit = resolveExplicitEnumCodes(compClass, fl.name());
             return EnumAccessor.forField(absOffset, fl.bitWidth(),
                     (Class<? extends Enum>) type, explicit);
         }
         throw new IllegalArgumentException(
                 "Unsupported @StoreField type: " + type + " on field " + field.getName()
-                + " (must be int, long, double, boolean, or an enum)");
+                + " (supported: int, byte, short, char, long, float, double, boolean, String, enum)");
+    }
+
+    /**
+     * Traverses a possibly-dotted field path (e.g. {@code "position.biome"}) through
+     * {@code cls} and returns {@code true} if the leaf field's {@link EnumField} annotation
+     * has {@code useExplicitCodes = true}.
+     */
+    private static boolean resolveExplicitEnumCodes(Class<?> cls, String fieldPath) {
+        int dot = fieldPath.indexOf('.');
+        if (dot >= 0) {
+            String first = fieldPath.substring(0, dot);
+            String rest  = fieldPath.substring(dot + 1);
+            Class<?> subType = resolveFieldType(cls, first);
+            return resolveExplicitEnumCodes(subType, rest);
+        }
+        // Leaf field
+        if (cls.isRecord()) {
+            for (java.lang.reflect.RecordComponent rc : cls.getRecordComponents()) {
+                if (rc.getName().equals(fieldPath)) {
+                    EnumField enumAnn = rc.getAnnotation(EnumField.class);
+                    return enumAnn != null && enumAnn.useExplicitCodes();
+                }
+            }
+        } else {
+            try {
+                java.lang.reflect.Field compField = cls.getDeclaredField(fieldPath);
+                EnumField enumAnn = compField.getAnnotation(EnumField.class);
+                return enumAnn != null && enumAnn.useExplicitCodes();
+            } catch (NoSuchFieldException ignored) {}
+        }
+        return false;
+    }
+
+    /**
+     * Returns the declared type of the field named {@code name} in {@code cls}
+     * (first record component or declared field with that name).
+     */
+    private static Class<?> resolveFieldType(Class<?> cls, String name) {
+        if (cls.isRecord()) {
+            for (java.lang.reflect.RecordComponent rc : cls.getRecordComponents()) {
+                if (rc.getName().equals(name)) return rc.getType();
+            }
+            throw new IllegalArgumentException(
+                    "Field '" + name + "' not found in record " + cls.getSimpleName());
+        } else {
+            try {
+                return cls.getDeclaredField(name).getType();
+            } catch (NoSuchFieldException e) {
+                throw new IllegalArgumentException("Field not found: " + name, e);
+            }
+        }
     }
 }

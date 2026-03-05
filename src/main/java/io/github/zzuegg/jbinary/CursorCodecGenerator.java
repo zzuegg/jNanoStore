@@ -147,11 +147,21 @@ final class CursorCodecGenerator {
         Object acc = spec.accessor();
         if (acc instanceof io.github.zzuegg.jbinary.accessor.IntAccessor a) {
             spec.vh().set(inst, a.get(store, row));
+        } else if (acc instanceof io.github.zzuegg.jbinary.accessor.ByteAccessor a) {
+            spec.vh().set(inst, a.get(store, row));
+        } else if (acc instanceof io.github.zzuegg.jbinary.accessor.ShortAccessor a) {
+            spec.vh().set(inst, a.get(store, row));
+        } else if (acc instanceof io.github.zzuegg.jbinary.accessor.CharAccessor a) {
+            spec.vh().set(inst, a.get(store, row));
         } else if (acc instanceof io.github.zzuegg.jbinary.accessor.LongAccessor a) {
+            spec.vh().set(inst, a.get(store, row));
+        } else if (acc instanceof io.github.zzuegg.jbinary.accessor.FloatAccessor a) {
             spec.vh().set(inst, a.get(store, row));
         } else if (acc instanceof io.github.zzuegg.jbinary.accessor.DoubleAccessor a) {
             spec.vh().set(inst, a.get(store, row));
         } else if (acc instanceof io.github.zzuegg.jbinary.accessor.BoolAccessor a) {
+            spec.vh().set(inst, a.get(store, row));
+        } else if (acc instanceof io.github.zzuegg.jbinary.accessor.StringAccessor a) {
             spec.vh().set(inst, a.get(store, row));
         } else if (acc instanceof io.github.zzuegg.jbinary.accessor.EnumAccessor<?> a) {
             spec.vh().set(inst, a.get(store, row));
@@ -163,12 +173,22 @@ final class CursorCodecGenerator {
         Object acc = spec.accessor();
         if (acc instanceof io.github.zzuegg.jbinary.accessor.IntAccessor a) {
             a.set(store, row, (int) spec.vh().get(inst));
+        } else if (acc instanceof io.github.zzuegg.jbinary.accessor.ByteAccessor a) {
+            a.set(store, row, (byte) spec.vh().get(inst));
+        } else if (acc instanceof io.github.zzuegg.jbinary.accessor.ShortAccessor a) {
+            a.set(store, row, (short) spec.vh().get(inst));
+        } else if (acc instanceof io.github.zzuegg.jbinary.accessor.CharAccessor a) {
+            a.set(store, row, (char) spec.vh().get(inst));
         } else if (acc instanceof io.github.zzuegg.jbinary.accessor.LongAccessor a) {
             a.set(store, row, (long) spec.vh().get(inst));
+        } else if (acc instanceof io.github.zzuegg.jbinary.accessor.FloatAccessor a) {
+            a.set(store, row, (float) spec.vh().get(inst));
         } else if (acc instanceof io.github.zzuegg.jbinary.accessor.DoubleAccessor a) {
             a.set(store, row, (double) spec.vh().get(inst));
         } else if (acc instanceof io.github.zzuegg.jbinary.accessor.BoolAccessor a) {
             a.set(store, row, (boolean) spec.vh().get(inst));
+        } else if (acc instanceof io.github.zzuegg.jbinary.accessor.StringAccessor a) {
+            a.set(store, row, (String) spec.vh().get(inst));
         } else if (acc instanceof io.github.zzuegg.jbinary.accessor.EnumAccessor a) {
             a.set(store, row, (Enum) spec.vh().get(inst));
         }

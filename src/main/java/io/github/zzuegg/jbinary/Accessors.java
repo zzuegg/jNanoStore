@@ -51,6 +51,21 @@ public final class Accessors {
         return new IntAccessor(fl.bitOffset(), fl.bitWidth(), fl.minRaw());
     }
 
+    public static ByteAccessor byteField(Class<?> component, String fieldName) {
+        FieldLayout fl = layout(component, fieldName);
+        return new ByteAccessor(fl.bitOffset(), fl.bitWidth(), fl.minRaw());
+    }
+
+    public static ShortAccessor shortField(Class<?> component, String fieldName) {
+        FieldLayout fl = layout(component, fieldName);
+        return new ShortAccessor(fl.bitOffset(), fl.bitWidth(), fl.minRaw());
+    }
+
+    public static CharAccessor charField(Class<?> component, String fieldName) {
+        FieldLayout fl = layout(component, fieldName);
+        return new CharAccessor(fl.bitOffset(), fl.bitWidth(), fl.minRaw());
+    }
+
     public static LongAccessor longField(Class<?> component, String fieldName) {
         FieldLayout fl = layout(component, fieldName);
         return new LongAccessor(fl.bitOffset(), fl.bitWidth(), fl.minRaw());
@@ -59,6 +74,11 @@ public final class Accessors {
     public static DoubleAccessor doubleField(Class<?> component, String fieldName) {
         FieldLayout fl = layout(component, fieldName);
         return new DoubleAccessor(fl.bitOffset(), fl.bitWidth(), fl.minRaw(), fl.scale());
+    }
+
+    public static FloatAccessor floatField(Class<?> component, String fieldName) {
+        FieldLayout fl = layout(component, fieldName);
+        return new FloatAccessor(fl.bitOffset(), fl.bitWidth(), fl.minRaw(), fl.scale());
     }
 
     public static BoolAccessor boolField(Class<?> component, String fieldName) {
@@ -79,6 +99,11 @@ public final class Accessors {
         return EnumAccessor.forField(fl.bitOffset(), fl.bitWidth(), enumType, explicit);
     }
 
+    public static StringAccessor stringField(Class<?> component, String fieldName) {
+        FieldLayout fl = layout(component, fieldName);
+        return new StringAccessor(fl.bitOffset(), (int) fl.minRaw(), (int) fl.scale());
+    }
+
     // ------------------------------------------------------------------
     // Store-aware accessors (absolute bit offset = component offset in store + field offset)
 
@@ -86,6 +111,24 @@ public final class Accessors {
         FieldLayout fl = layout(component, fieldName);
         int abs = store.componentBitOffset(component) + fl.bitOffset();
         return new IntAccessor(abs, fl.bitWidth(), fl.minRaw());
+    }
+
+    public static ByteAccessor byteFieldInStore(DataStore<?> store, Class<?> component, String fieldName) {
+        FieldLayout fl = layout(component, fieldName);
+        int abs = store.componentBitOffset(component) + fl.bitOffset();
+        return new ByteAccessor(abs, fl.bitWidth(), fl.minRaw());
+    }
+
+    public static ShortAccessor shortFieldInStore(DataStore<?> store, Class<?> component, String fieldName) {
+        FieldLayout fl = layout(component, fieldName);
+        int abs = store.componentBitOffset(component) + fl.bitOffset();
+        return new ShortAccessor(abs, fl.bitWidth(), fl.minRaw());
+    }
+
+    public static CharAccessor charFieldInStore(DataStore<?> store, Class<?> component, String fieldName) {
+        FieldLayout fl = layout(component, fieldName);
+        int abs = store.componentBitOffset(component) + fl.bitOffset();
+        return new CharAccessor(abs, fl.bitWidth(), fl.minRaw());
     }
 
     public static LongAccessor longFieldInStore(DataStore<?> store, Class<?> component, String fieldName) {
@@ -98,6 +141,12 @@ public final class Accessors {
         FieldLayout fl = layout(component, fieldName);
         int abs = store.componentBitOffset(component) + fl.bitOffset();
         return new DoubleAccessor(abs, fl.bitWidth(), fl.minRaw(), fl.scale());
+    }
+
+    public static FloatAccessor floatFieldInStore(DataStore<?> store, Class<?> component, String fieldName) {
+        FieldLayout fl = layout(component, fieldName);
+        int abs = store.componentBitOffset(component) + fl.bitOffset();
+        return new FloatAccessor(abs, fl.bitWidth(), fl.minRaw(), fl.scale());
     }
 
     public static BoolAccessor boolFieldInStore(DataStore<?> store, Class<?> component, String fieldName) {
@@ -116,6 +165,12 @@ public final class Accessors {
         return EnumAccessor.forField(abs, fl.bitWidth(), enumType, explicit);
     }
 
+    public static StringAccessor stringFieldInStore(DataStore<?> store, Class<?> component, String fieldName) {
+        FieldLayout fl = layout(component, fieldName);
+        int abs = store.componentBitOffset(component) + fl.bitOffset();
+        return new StringAccessor(abs, (int) fl.minRaw(), (int) fl.scale());
+    }
+
     // ------------------------------------------------------------------
     private static FieldLayout layout(Class<?> component, String fieldName) {
         return LayoutBuilder.layout(component).field(fieldName);
@@ -123,6 +178,11 @@ public final class Accessors {
 
     @SuppressWarnings("unchecked")
     private static <E extends Enum<E>> Class<E> enumType(Class<?> component, String fieldName) {
+        int dot = fieldName.indexOf('.');
+        if (dot >= 0) {
+            Class<?> subType = resolveFieldType(component, fieldName.substring(0, dot));
+            return enumType(subType, fieldName.substring(dot + 1));
+        }
         if (component.isRecord()) {
             for (RecordComponent rc : component.getRecordComponents()) {
                 if (rc.getName().equals(fieldName)) return (Class<E>) rc.getType();
@@ -138,6 +198,11 @@ public final class Accessors {
     }
 
     private static RecordComponent recordComponent(Class<?> component, String fieldName) {
+        int dot = fieldName.indexOf('.');
+        if (dot >= 0) {
+            Class<?> subType = resolveFieldType(component, fieldName.substring(0, dot));
+            return recordComponent(subType, fieldName.substring(dot + 1));
+        }
         for (RecordComponent rc : component.getRecordComponents()) {
             if (rc.getName().equals(fieldName)) return rc;
         }
@@ -145,6 +210,11 @@ public final class Accessors {
     }
 
     private static EnumField enumFieldAnnotation(Class<?> component, String fieldName) {
+        int dot = fieldName.indexOf('.');
+        if (dot >= 0) {
+            Class<?> subType = resolveFieldType(component, fieldName.substring(0, dot));
+            return enumFieldAnnotation(subType, fieldName.substring(dot + 1));
+        }
         if (component.isRecord()) {
             return recordComponent(component, fieldName)
                     .getAnnotation(EnumField.class);
@@ -156,20 +226,42 @@ public final class Accessors {
         }
     }
 
+    /**
+     * Returns the declared type of the field/record-component named {@code name} in {@code cls}.
+     */
+    private static Class<?> resolveFieldType(Class<?> cls, String name) {
+        if (cls.isRecord()) {
+            for (RecordComponent rc : cls.getRecordComponents()) {
+                if (rc.getName().equals(name)) return rc.getType();
+            }
+            throw new IllegalArgumentException(
+                    "Field '" + name + "' not found in record " + cls.getSimpleName());
+        } else {
+            try {
+                return cls.getDeclaredField(name).getType();
+            } catch (NoSuchFieldException e) {
+                throw new IllegalArgumentException(
+                        "Field '" + name + "' not found in " + cls.getSimpleName(), e);
+            }
+        }
+    }
+
     // ------------------------------------------------------------------
     // RowView factory
 
     /**
-     * Creates a pre-compiled {@link RowView} for the given record component class,
+     * Creates a pre-compiled {@link RowView} for the given component class,
      * bound to the given store for bit-offset resolution.
      *
-     * @param store       the DataStore the view will be used with
-     * @param recordClass the annotated record class
-     * @param <T>         the record type
+     * <p>The class may be a record or a plain class with a no-arg constructor.
+     *
+     * @param store the DataStore the view will be used with
+     * @param cls   the annotated component class (record or plain class)
+     * @param <T>   the component type
      * @return a {@link RowView} with all field accessors pre-computed
      */
-    public static <T extends Record> RowView<T> rowViewInStore(DataStore<?> store, Class<T> recordClass) {
-        return RowView.of(store, recordClass);
+    public static <T> RowView<T> rowViewInStore(DataStore<?> store, Class<T> cls) {
+        return RowView.of(store, cls);
     }
 
     // ------------------------------------------------------------------

@@ -715,4 +715,115 @@ class DataCursorTest {
         assertSame(ref, cursor.get());
         assertEquals(10, ref.height);
     }
+
+    // ------------------------------------------------------------------ tests: new primitive types
+
+    record AllPrimitivesComponent(
+            @BitField(min = 0, max = 255)                          int    intVal,
+            @BitField(min = 0, max = 127)                          byte   byteVal,
+            @BitField(min = 0, max = 32767)                        short  shortVal,
+            @BitField(min = 0, max = 65535)                        char   charVal,
+            @BitField(min = 0, max = 1_000_000)                    long   longVal,
+            @DecimalField(min = 0.0, max = 1.0, precision = 3)    float  floatVal,
+            @DecimalField(min = -1.0, max = 1.0, precision = 4)   double doubleVal,
+            @BoolField                                              boolean boolVal,
+            @StringField(maxLength = 8)                            String  strVal
+    ) {}
+
+    static class AllPrimitivesCursor {
+        @StoreField(component = AllPrimitivesComponent.class, field = "intVal")
+        public int intVal;
+
+        @StoreField(component = AllPrimitivesComponent.class, field = "byteVal")
+        public byte byteVal;
+
+        @StoreField(component = AllPrimitivesComponent.class, field = "shortVal")
+        public short shortVal;
+
+        @StoreField(component = AllPrimitivesComponent.class, field = "charVal")
+        public char charVal;
+
+        @StoreField(component = AllPrimitivesComponent.class, field = "longVal")
+        public long longVal;
+
+        @StoreField(component = AllPrimitivesComponent.class, field = "floatVal")
+        public float floatVal;
+
+        @StoreField(component = AllPrimitivesComponent.class, field = "doubleVal")
+        public double doubleVal;
+
+        @StoreField(component = AllPrimitivesComponent.class, field = "boolVal")
+        public boolean boolVal;
+
+        @StoreField(component = AllPrimitivesComponent.class, field = "strVal")
+        public String strVal;
+    }
+
+    @Test
+    void cursorAllPrimitivesRoundTripByteBuddy() {
+        DataStore<?> store = DataStore.packed(10, AllPrimitivesComponent.class);
+        DataCursor<AllPrimitivesCursor> cursor = DataCursor.of(store, AllPrimitivesCursor.class);
+
+        cursor.get().intVal    = 200;
+        cursor.get().byteVal   = 42;
+        cursor.get().shortVal  = 1000;
+        cursor.get().charVal   = 'Z';
+        cursor.get().longVal   = 500_000L;
+        cursor.get().floatVal  = 0.5f;
+        cursor.get().doubleVal = -0.75;
+        cursor.get().boolVal   = true;
+        cursor.get().strVal    = "hello";
+        cursor.flush(store, 3);
+
+        // Reset cursor state
+        cursor.get().intVal    = 0;
+        cursor.get().byteVal   = 0;
+        cursor.get().shortVal  = 0;
+        cursor.get().charVal   = '\0';
+        cursor.get().longVal   = 0L;
+        cursor.get().floatVal  = 0f;
+        cursor.get().doubleVal = 0.0;
+        cursor.get().boolVal   = false;
+        cursor.get().strVal    = null;
+
+        cursor.load(store, 3);
+        assertEquals(200,     cursor.get().intVal);
+        assertEquals(42,      cursor.get().byteVal);
+        assertEquals(1000,    cursor.get().shortVal);
+        assertEquals('Z',     cursor.get().charVal);
+        assertEquals(500_000L, cursor.get().longVal);
+        assertEquals(0.5f,    cursor.get().floatVal,  0.001f);
+        assertEquals(-0.75,   cursor.get().doubleVal, 0.0001);
+        assertTrue(cursor.get().boolVal);
+        assertEquals("hello", cursor.get().strVal);
+    }
+
+    @Test
+    void cursorAllPrimitivesRoundTripVarHandle() {
+        DataStore<?> store = DataStore.packed(10, AllPrimitivesComponent.class);
+        DataCursor<AllPrimitivesCursor> cursor = DataCursor.ofVarHandle(store, AllPrimitivesCursor.class);
+
+        cursor.get().intVal    = 100;
+        cursor.get().byteVal   = 10;
+        cursor.get().shortVal  = 500;
+        cursor.get().charVal   = 'A';
+        cursor.get().longVal   = 999_999L;
+        cursor.get().floatVal  = 0.25f;
+        cursor.get().doubleVal = 0.5;
+        cursor.get().boolVal   = false;
+        cursor.get().strVal    = "world";
+        cursor.flush(store, 7);
+
+        cursor.get().strVal = null;
+        cursor.load(store, 7);
+        assertEquals(100,     cursor.get().intVal);
+        assertEquals(10,      cursor.get().byteVal);
+        assertEquals(500,     cursor.get().shortVal);
+        assertEquals('A',     cursor.get().charVal);
+        assertEquals(999_999L, cursor.get().longVal);
+        assertEquals(0.25f,   cursor.get().floatVal,  0.001f);
+        assertEquals(0.5,     cursor.get().doubleVal, 0.0001);
+        assertFalse(cursor.get().boolVal);
+        assertEquals("world", cursor.get().strVal);
+    }
 }
