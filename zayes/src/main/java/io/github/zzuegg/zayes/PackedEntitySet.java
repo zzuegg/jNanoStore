@@ -9,6 +9,7 @@ import com.simsilica.es.EntityId;
 import com.simsilica.es.EntitySet;
 
 import io.github.zzuegg.jbinary.Accessors;
+import io.github.zzuegg.jbinary.DataCursor;
 import io.github.zzuegg.jbinary.DataStore;
 import io.github.zzuegg.jbinary.accessor.BoolAccessor;
 import io.github.zzuegg.jbinary.annotation.BoolField;
