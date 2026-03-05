@@ -48,8 +48,8 @@ public final class IndexedEntity implements Entity {
 
     @Override
     public void set(EntityComponent c) {
-        // Write directly into the set's store so it is immediately visible on the
-        // current frame and processChange can skip the round-trip to the parent.
+        // Write directly into the set's store so entity.get() reflects the value
+        // immediately (matching DefaultEntityData's live-read contract).
         owner.writeComponentDirect(indexedId.getIndex(), c);
         // Propagate to the parent for authoritative storage and change notification.
         ed.setComponent(indexedId.getEntityId(), c);

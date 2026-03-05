@@ -87,14 +87,6 @@ public final class PackedEntitySet extends AbstractSet<Entity> implements Entity
     /** Dense index → IndexedEntity (null if slot is free). */
     private final IndexedEntity[] entities;
 
-    /**
-     * Per-slot bitfield: bit {@code ti} is set when component type {@code ti} was written
-     * directly via {@link #writeComponentDirect} (i.e. via {@link IndexedEntity#set}), so
-     * the store is already up to date and {@link #processChange} can skip the parent read.
-     * The bit is cleared once consumed in processChange.
-     */
-    private final int[] selfUpdatedFlags;
-
     /** EntityId (raw long) → dense index. */
     private final HashMap<Long, Integer> idToIndex = new HashMap<>();
 
@@ -162,7 +154,6 @@ public final class PackedEntitySet extends AbstractSet<Entity> implements Entity
 
         this.indexedIds      = new IndexedEntityId[capacity];
         this.entities        = new IndexedEntity[capacity];
-        this.selfUpdatedFlags = new int[capacity];
 
         loadInitialEntities();
     }
@@ -238,7 +229,6 @@ public final class PackedEntitySet extends AbstractSet<Entity> implements Entity
         }
         indexedIds[index] = null;
         entities[index]   = null;
-        selfUpdatedFlags[index] = 0;
         freeIndices.add(index);
         size--;
     }
@@ -269,9 +259,10 @@ public final class PackedEntitySet extends AbstractSet<Entity> implements Entity
     // Package-private accessors for IndexedEntity
 
     /**
-     * Writes a single component directly into the store/heap for the given dense index.
-     * Called from {@link IndexedEntity#set} before the parent's change notification fires,
-     * so the store is already up to date when {@link #processChange} runs.
+     * Writes component {@code c} directly into the store at {@code index}.
+     * Called from {@link IndexedEntity#set} to keep the local store current
+     * (matching DefaultEntityData's live-read contract for {@code entity.get()}).
+     * Also used internally when loading component values during {@link #applyChanges}.
      */
     @SuppressWarnings("unchecked")
     void writeComponentDirect(int index, EntityComponent c) {
@@ -282,8 +273,6 @@ public final class PackedEntitySet extends AbstractSet<Entity> implements Entity
         } else {
             heapComponents[ti][index] = c;
         }
-        // Mark this slot/type as self-updated so processChange can skip parent.getComponent()
-        selfUpdatedFlags[index] |= (1 << ti);
     }
 
     EntityComponent getComponentForIndex(int index, Class<?> type) {
@@ -389,17 +378,7 @@ public final class PackedEntitySet extends AbstractSet<Entity> implements Entity
             boolean needsFilterCheck = filter != null
                     && filter.getComponentType() == changedType;
 
-            // Fast path: if this store-backed component was already written by
-            // IndexedEntity.set() (self-updated), the store is current — just
-            // mark changed and skip the parent round-trip.
-            if (changedTi >= 0 && bridges[changedTi] != null && !needsFilterCheck
-                    && (selfUpdatedFlags[idx] & (1 << changedTi)) != 0) {
-                selfUpdatedFlags[idx] &= ~(1 << changedTi);
-                changedEntities.add(entities[idx]);
-                return;
-            }
-
-            // Full path: fetch from parent to check for removal or filter failure,
+            // Fetch from parent to check for removal or filter failure,
             // and update store-backed / heap-backed components.
             EntityComponent newComp = parent.getComponent(eid, changedType);
 

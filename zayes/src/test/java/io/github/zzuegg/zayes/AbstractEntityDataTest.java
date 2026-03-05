@@ -413,6 +413,39 @@ public abstract class AbstractEntityDataTest {
     }
 
     @Test
+    void entitySet_entityGet_returnsSnapshotFromLastApplyChanges() {
+        // The EntitySet contract: change notifications (added/changed/removed) are only
+        // populated after applyChanges(). Before applyChanges(), getChangedEntities()
+        // must be empty even if entity.set() was called.
+        EntityId id = ed.createEntity();
+        ed.setComponent(id, new Position(1, 2, 3));
+
+        EntitySet set = ed.getEntities(Position.class);
+        try {
+            set.applyChanges();
+
+            Entity entity = set.getEntity(id);
+            assertNotNull(entity);
+
+            // Write a new value via entity.set().
+            entity.set(new Position(9, 9, 9));
+
+            // Before applyChanges(): the change must NOT yet appear in the change sets.
+            assertTrue(set.getChangedEntities().isEmpty(),
+                    "changedEntities must be empty before applyChanges()");
+
+            // After applyChanges(): the change is now visible in the change set and
+            // the entity carries the new value.
+            boolean changed = set.applyChanges();
+            assertTrue(changed);
+            assertFalse(set.getChangedEntities().isEmpty());
+            assertEquals(new Position(9, 9, 9), set.getEntity(id).get(Position.class));
+        } finally {
+            set.release();
+        }
+    }
+
+    @Test
     void entitySet_clearChangeSets_clearsAddedChangedRemoved() {
         EntityId id = ed.createEntity();
         ed.setComponent(id, new Position(0, 0, 0));
