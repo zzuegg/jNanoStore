@@ -27,14 +27,14 @@ jobs:
         uses: gradle/actions/setup-gradle@v4
 
       - name: Run unit tests
-        run: ./gradlew test --no-daemon
+        run: ./gradlew :core:test --no-daemon
 
       - name: Upload test reports
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: test-reports
-          path: build/reports/tests/
+          path: core/build/reports/tests/
 
   benchmark:
     name: JMH Benchmark (quick run)
@@ -55,11 +55,11 @@ jobs:
         uses: gradle/actions/setup-gradle@v4
 
       - name: Run JMH benchmarks (1 warmup, 1 measurement, 1 fork)
-        run: ./gradlew jmhCi --no-daemon
+        run: ./gradlew :core:jmhCi --no-daemon
 
       - name: Upload benchmark results
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: benchmark-results
-          path: build/reports/
+          path: core/build/reports/
