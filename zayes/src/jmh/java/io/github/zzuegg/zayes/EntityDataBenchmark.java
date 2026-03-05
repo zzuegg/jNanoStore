@@ -55,7 +55,7 @@ public class EntityDataBenchmark {
     // -----------------------------------------------------------------------
     // Benchmark parameter
 
-    @Param({"1000"})
+    @Param({"100000"})
     int entityCount;
 
     // -----------------------------------------------------------------------
@@ -123,7 +123,7 @@ public class EntityDataBenchmark {
                     new Orientation(i * 0.1f, i * 0.2f, i * 0.3f),
                     new Speed(1.0f + i * 0.001f));
         }
-        packedEd  = new PackedEntityData(packedUnderlyingEd);
+        packedEd  = new PackedEntityData(packedUnderlyingEd, entityCount + 1000);
         packedSet = packedEd.getEntities(Position.class, Orientation.class, Speed.class);
         packedSet.applyChanges();
 
