@@ -51,6 +51,21 @@ public final class Accessors {
         return new IntAccessor(fl.bitOffset(), fl.bitWidth(), fl.minRaw());
     }
 
+    public static ByteAccessor byteField(Class<?> component, String fieldName) {
+        FieldLayout fl = layout(component, fieldName);
+        return new ByteAccessor(fl.bitOffset(), fl.bitWidth(), fl.minRaw());
+    }
+
+    public static ShortAccessor shortField(Class<?> component, String fieldName) {
+        FieldLayout fl = layout(component, fieldName);
+        return new ShortAccessor(fl.bitOffset(), fl.bitWidth(), fl.minRaw());
+    }
+
+    public static CharAccessor charField(Class<?> component, String fieldName) {
+        FieldLayout fl = layout(component, fieldName);
+        return new CharAccessor(fl.bitOffset(), fl.bitWidth(), fl.minRaw());
+    }
+
     public static LongAccessor longField(Class<?> component, String fieldName) {
         FieldLayout fl = layout(component, fieldName);
         return new LongAccessor(fl.bitOffset(), fl.bitWidth(), fl.minRaw());
@@ -91,6 +106,24 @@ public final class Accessors {
         FieldLayout fl = layout(component, fieldName);
         int abs = store.componentBitOffset(component) + fl.bitOffset();
         return new IntAccessor(abs, fl.bitWidth(), fl.minRaw());
+    }
+
+    public static ByteAccessor byteFieldInStore(DataStore<?> store, Class<?> component, String fieldName) {
+        FieldLayout fl = layout(component, fieldName);
+        int abs = store.componentBitOffset(component) + fl.bitOffset();
+        return new ByteAccessor(abs, fl.bitWidth(), fl.minRaw());
+    }
+
+    public static ShortAccessor shortFieldInStore(DataStore<?> store, Class<?> component, String fieldName) {
+        FieldLayout fl = layout(component, fieldName);
+        int abs = store.componentBitOffset(component) + fl.bitOffset();
+        return new ShortAccessor(abs, fl.bitWidth(), fl.minRaw());
+    }
+
+    public static CharAccessor charFieldInStore(DataStore<?> store, Class<?> component, String fieldName) {
+        FieldLayout fl = layout(component, fieldName);
+        int abs = store.componentBitOffset(component) + fl.bitOffset();
+        return new CharAccessor(abs, fl.bitWidth(), fl.minRaw());
     }
 
     public static LongAccessor longFieldInStore(DataStore<?> store, Class<?> component, String fieldName) {

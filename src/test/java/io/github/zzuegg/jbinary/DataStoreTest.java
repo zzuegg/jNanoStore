@@ -204,4 +204,66 @@ class DataStoreTest {
         assertEquals(1, io.github.zzuegg.jbinary.schema.LayoutBuilder.bitsRequired(1));
         assertEquals(1, io.github.zzuegg.jbinary.schema.LayoutBuilder.bitsRequired(0));
     }
+
+    // --------------------------------------------------------------- byte / short / char
+
+    record ByteRecord(
+            @BitField(min = -128, max = 127) byte value
+    ) {}
+
+    record ShortRecord(
+            @BitField(min = -32768, max = 32767) short value
+    ) {}
+
+    record CharRecord(
+            @BitField(min = 32, max = 126) char value
+    ) {}
+
+    @Test
+    void byteAccessorRoundTrip() {
+        DataStore<?> store = DataStore.packed(10, ByteRecord.class);
+        ByteAccessor acc = Accessors.byteFieldInStore(store, ByteRecord.class, "value");
+
+        acc.set(store, 0, (byte) 42);
+        assertEquals((byte) 42, acc.get(store, 0));
+
+        acc.set(store, 1, (byte) -1);
+        assertEquals((byte) -1, acc.get(store, 1));
+
+        acc.set(store, 2, (byte) -128);
+        assertEquals((byte) -128, acc.get(store, 2));
+
+        acc.set(store, 3, (byte) 127);
+        assertEquals((byte) 127, acc.get(store, 3));
+    }
+
+    @Test
+    void shortAccessorRoundTrip() {
+        DataStore<?> store = DataStore.packed(10, ShortRecord.class);
+        ShortAccessor acc = Accessors.shortFieldInStore(store, ShortRecord.class, "value");
+
+        acc.set(store, 0, (short) 1000);
+        assertEquals((short) 1000, acc.get(store, 0));
+
+        acc.set(store, 1, (short) -32768);
+        assertEquals((short) -32768, acc.get(store, 1));
+
+        acc.set(store, 2, (short) 32767);
+        assertEquals((short) 32767, acc.get(store, 2));
+    }
+
+    @Test
+    void charAccessorRoundTrip() {
+        DataStore<?> store = DataStore.packed(10, CharRecord.class);
+        CharAccessor acc = Accessors.charFieldInStore(store, CharRecord.class, "value");
+
+        acc.set(store, 0, 'A');
+        assertEquals('A', acc.get(store, 0));
+
+        acc.set(store, 1, 'z');
+        assertEquals('z', acc.get(store, 1));
+
+        acc.set(store, 2, ' ');
+        assertEquals(' ', acc.get(store, 2));
+    }
 }

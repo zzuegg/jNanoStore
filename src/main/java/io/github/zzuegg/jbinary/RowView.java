@@ -173,6 +173,24 @@ final class RecordRowView<T extends Record> implements RowView<T> {
                 public Object get(DataStore s, int r) { return acc.get(s, r); }
                 public void set(DataStore s, int r, Object v) { acc.set(s, r, (Integer) v); }
             };
+        } else if (type == byte.class) {
+            ByteAccessor acc = new ByteAccessor(absOffset, fl.bitWidth(), fl.minRaw());
+            return new FieldAccessor() {
+                public Object get(DataStore s, int r) { return acc.get(s, r); }
+                public void set(DataStore s, int r, Object v) { acc.set(s, r, (Byte) v); }
+            };
+        } else if (type == short.class) {
+            ShortAccessor acc = new ShortAccessor(absOffset, fl.bitWidth(), fl.minRaw());
+            return new FieldAccessor() {
+                public Object get(DataStore s, int r) { return acc.get(s, r); }
+                public void set(DataStore s, int r, Object v) { acc.set(s, r, (Short) v); }
+            };
+        } else if (type == char.class) {
+            CharAccessor acc = new CharAccessor(absOffset, fl.bitWidth(), fl.minRaw());
+            return new FieldAccessor() {
+                public Object get(DataStore s, int r) { return acc.get(s, r); }
+                public void set(DataStore s, int r, Object v) { acc.set(s, r, (Character) v); }
+            };
         } else if (type == long.class) {
             LongAccessor acc = new LongAccessor(absOffset, fl.bitWidth(), fl.minRaw());
             return new FieldAccessor() {
