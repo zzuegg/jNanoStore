@@ -266,4 +266,104 @@ class DataStoreTest {
         acc.set(store, 2, ' ');
         assertEquals(' ', acc.get(store, 2));
     }
+
+    // --------------------------------------------------------------- String
+
+    record PlayerRecord(
+            @BitField(min = 0, max = 255) int id,
+            @StringField(maxLength = 16) String name
+    ) {}
+
+    @Test
+    void stringAccessorRoundTrip() {
+        DataStore<?> store = DataStore.packed(10, PlayerRecord.class);
+        StringAccessor acc = Accessors.stringFieldInStore(store, PlayerRecord.class, "name");
+
+        // basic round-trip
+        acc.set(store, 0, "Alice");
+        assertEquals("Alice", acc.get(store, 0));
+
+        // overwrite with shorter string — old chars must be zeroed
+        acc.set(store, 0, "Al");
+        assertEquals("Al", acc.get(store, 0));
+
+        // empty string
+        acc.set(store, 1, "");
+        assertEquals("", acc.get(store, 1));
+
+        // null treated as empty
+        acc.set(store, 2, null);
+        assertEquals("", acc.get(store, 2));
+
+        // exactly maxLength
+        String maxStr = "A".repeat(16);
+        acc.set(store, 3, maxStr);
+        assertEquals(maxStr, acc.get(store, 3));
+
+        // longer than maxLength — silently truncated
+        acc.set(store, 4, "A".repeat(20));
+        assertEquals("A".repeat(16), acc.get(store, 4));
+
+        // Unicode BMP characters
+        acc.set(store, 5, "\u00e9\u00e0\u00fc");
+        assertEquals("\u00e9\u00e0\u00fc", acc.get(store, 5));
+
+        // Supplementary characters (surrogate pairs): each emoji = 2 char slots
+        // "\uD83D\uDE00" is U+1F600 (😀); maxLength=16, so 8 emojis fit
+        String emoji4 = "\uD83D\uDE00\uD83D\uDE00\uD83D\uDE00\uD83D\uDE00"; // 4 emojis = 8 chars
+        acc.set(store, 6, emoji4);
+        assertEquals(emoji4, acc.get(store, 6));
+
+        // Boundary: exactly 8 emojis = 16 chars (fills maxLength exactly)
+        String emoji8 = "\uD83D\uDE00".repeat(8);
+        acc.set(store, 7, emoji8);
+        assertEquals(emoji8, acc.get(store, 7));
+
+        // 9 emojis = 18 chars; truncated to first 16 chars = 8 emojis
+        String emoji9 = "\uD83D\uDE00".repeat(9);
+        acc.set(store, 8, emoji9);
+        assertEquals(emoji8, acc.get(store, 8));
+    }
+
+    @Test
+    void stringAccessorStoreUnaware() {
+        // Store-unaware accessor (works when store has a single component)
+        DataStore<?> store = DataStore.packed(5, PlayerRecord.class);
+        StringAccessor acc = Accessors.stringField(PlayerRecord.class, "name");
+
+        acc.set(store, 0, "Bob");
+        assertEquals("Bob", acc.get(store, 0));
+    }
+
+    record SingleCharRecord(
+            @StringField(maxLength = 1) String value
+    ) {}
+
+    @Test
+    void stringAccessorMaxLengthOne() {
+        DataStore<?> store = DataStore.packed(5, SingleCharRecord.class);
+        StringAccessor acc = Accessors.stringFieldInStore(store, SingleCharRecord.class, "value");
+
+        acc.set(store, 0, "A");
+        assertEquals("A", acc.get(store, 0));
+
+        // Two chars truncated to one
+        acc.set(store, 0, "AB");
+        assertEquals("A", acc.get(store, 0));
+
+        // Empty string
+        acc.set(store, 1, "");
+        assertEquals("", acc.get(store, 1));
+    }
+
+    @Test
+    void rowViewWithString() {
+        DataStore<?> store = DataStore.packed(5, PlayerRecord.class);
+        RowView<PlayerRecord> view = RowView.of(store, PlayerRecord.class);
+
+        view.set(store, 0, new PlayerRecord(42, "Charlie"));
+        PlayerRecord r = view.get(store, 0);
+        assertEquals(42, r.id());
+        assertEquals("Charlie", r.name());
+    }
 }

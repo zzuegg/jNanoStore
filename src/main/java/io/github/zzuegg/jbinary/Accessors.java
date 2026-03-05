@@ -99,6 +99,11 @@ public final class Accessors {
         return EnumAccessor.forField(fl.bitOffset(), fl.bitWidth(), enumType, explicit);
     }
 
+    public static StringAccessor stringField(Class<?> component, String fieldName) {
+        FieldLayout fl = layout(component, fieldName);
+        return new StringAccessor(fl.bitOffset(), (int) fl.minRaw(), (int) fl.scale());
+    }
+
     // ------------------------------------------------------------------
     // Store-aware accessors (absolute bit offset = component offset in store + field offset)
 
@@ -158,6 +163,12 @@ public final class Accessors {
         Class<E> enumType = enumType(component, fieldName);
         boolean explicit = enumFieldAnnotation(component, fieldName).useExplicitCodes();
         return EnumAccessor.forField(abs, fl.bitWidth(), enumType, explicit);
+    }
+
+    public static StringAccessor stringFieldInStore(DataStore<?> store, Class<?> component, String fieldName) {
+        FieldLayout fl = layout(component, fieldName);
+        int abs = store.componentBitOffset(component) + fl.bitOffset();
+        return new StringAccessor(abs, (int) fl.minRaw(), (int) fl.scale());
     }
 
     // ------------------------------------------------------------------

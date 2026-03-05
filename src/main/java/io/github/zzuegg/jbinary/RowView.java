@@ -224,6 +224,12 @@ final class RecordRowView<T extends Record> implements RowView<T> {
                 @SuppressWarnings("unchecked")
                 public void set(DataStore s, int r, Object v) { acc.set(s, r, (Enum) v); }
             };
+        } else if (type == String.class) {
+            StringAccessor acc = new StringAccessor(absOffset, (int) fl.minRaw(), (int) fl.scale());
+            return new FieldAccessor() {
+                public Object get(DataStore s, int r) { return acc.get(s, r); }
+                public void set(DataStore s, int r, Object v) { acc.set(s, r, (String) v); }
+            };
         }
         throw new IllegalArgumentException("Unsupported field type for RowView: " + type);
     }

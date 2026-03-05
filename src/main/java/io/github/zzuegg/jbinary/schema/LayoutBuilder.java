@@ -50,7 +50,8 @@ public final class LayoutBuilder {
                         rc.getAnnotation(BitField.class),
                         rc.getAnnotation(DecimalField.class),
                         rc.getAnnotation(BoolField.class),
-                        rc.getAnnotation(EnumField.class));
+                        rc.getAnnotation(EnumField.class),
+                        rc.getAnnotation(StringField.class));
             }
         } else {
             // Support plain classes / interfaces via declared fields
@@ -60,7 +61,8 @@ public final class LayoutBuilder {
                         f.getAnnotation(BitField.class),
                         f.getAnnotation(DecimalField.class),
                         f.getAnnotation(BoolField.class),
-                        f.getAnnotation(EnumField.class));
+                        f.getAnnotation(EnumField.class),
+                        f.getAnnotation(StringField.class));
             }
         }
         return list;
@@ -70,22 +72,27 @@ public final class LayoutBuilder {
      * Adds a field entry (or multiple flattened entries for composed objects) to {@code list}.
      *
      * <p>If {@code type} is non-primitive, non-enum and has none of the primitive bit-packing
-     * annotations ({@link BitField}, {@link BoolField}, {@link EnumField}), it is treated as a
-     * <em>composed object</em> (record or plain class) whose sub-fields are expanded in-place
-     * with dotted names (e.g., {@code "position.x"}).  An optional {@link DecimalField} on the
-     * composed field acts as a default for any sub-fields that do not carry their own annotation;
-     * sub-field annotations always take priority.
+     * annotations ({@link BitField}, {@link BoolField}, {@link EnumField}, {@link StringField}),
+     * it is treated as a <em>composed object</em> (record or plain class) whose sub-fields are
+     * expanded in-place with dotted names (e.g., {@code "position.x"}).  An optional
+     * {@link DecimalField} on the composed field acts as a default for any sub-fields that do
+     * not carry their own annotation; sub-field annotations always take priority.
      */
     private static void collectEntryForField(List<FieldEntry> list,
                                               String name, Class<?> type,
                                               BitField bitField, DecimalField decimalField,
-                                              BoolField boolField, EnumField enumField) {
-        if (bitField == null && boolField == null && enumField == null
-                && !type.isPrimitive() && !type.isEnum() && !type.isArray()) {
+                                              BoolField boolField, EnumField enumField,
+                                              StringField stringField) {
+        if (stringField != null) {
+            // String field — store directly, do not expand
+            list.add(new FieldEntry(name, type, bitField, decimalField, boolField, enumField, stringField));
+        } else if (bitField == null && boolField == null && enumField == null
+                && !type.isPrimitive() && !type.isEnum() && !type.isArray()
+                && type != String.class) {
             // Composed type (record or plain class) — expand sub-fields recursively
             expandComposedType(list, name, type, decimalField);
         } else {
-            list.add(new FieldEntry(name, type, bitField, decimalField, boolField, enumField));
+            list.add(new FieldEntry(name, type, bitField, decimalField, boolField, enumField, null));
         }
     }
 
@@ -101,24 +108,27 @@ public final class LayoutBuilder {
      *                              of their own
      */
     private static void expandComposedType(List<FieldEntry> list,
-                                            String prefix, Class<?> subType,
-                                            DecimalField parentDecimalDefault) {
+                                             String prefix, Class<?> subType,
+                                             DecimalField parentDecimalDefault) {
         if (subType.isRecord()) {
             for (RecordComponent subRc : subType.getRecordComponents()) {
                 String subName = prefix + "." + subRc.getName();
                 Class<?> subFieldType = subRc.getType();
 
-                BitField   bitField      = subRc.getAnnotation(BitField.class);
+                BitField    bitField     = subRc.getAnnotation(BitField.class);
                 DecimalField decimalField = subRc.getAnnotation(DecimalField.class);
-                BoolField  boolField     = subRc.getAnnotation(BoolField.class);
-                EnumField  enumField     = subRc.getAnnotation(EnumField.class);
+                BoolField   boolField    = subRc.getAnnotation(BoolField.class);
+                EnumField   enumField    = subRc.getAnnotation(EnumField.class);
+                StringField stringField  = subRc.getAnnotation(StringField.class);
 
                 // If the sub-field has no annotation of its own, inherit the parent default.
-                if (decimalField == null && bitField == null && boolField == null && enumField == null) {
+                if (decimalField == null && bitField == null && boolField == null
+                        && enumField == null && stringField == null) {
                     decimalField = parentDecimalDefault;
                 }
 
-                collectEntryForField(list, subName, subFieldType, bitField, decimalField, boolField, enumField);
+                collectEntryForField(list, subName, subFieldType, bitField, decimalField,
+                        boolField, enumField, stringField);
             }
         } else {
             // Plain class — iterate declared fields (skip static and synthetic)
@@ -127,24 +137,28 @@ public final class LayoutBuilder {
                 String subName = prefix + "." + subField.getName();
                 Class<?> subFieldType = subField.getType();
 
-                BitField   bitField      = subField.getAnnotation(BitField.class);
+                BitField    bitField     = subField.getAnnotation(BitField.class);
                 DecimalField decimalField = subField.getAnnotation(DecimalField.class);
-                BoolField  boolField     = subField.getAnnotation(BoolField.class);
-                EnumField  enumField     = subField.getAnnotation(EnumField.class);
+                BoolField   boolField    = subField.getAnnotation(BoolField.class);
+                EnumField   enumField    = subField.getAnnotation(EnumField.class);
+                StringField stringField  = subField.getAnnotation(StringField.class);
 
                 // If the sub-field has no annotation of its own, inherit the parent default.
-                if (decimalField == null && bitField == null && boolField == null && enumField == null) {
+                if (decimalField == null && bitField == null && boolField == null
+                        && enumField == null && stringField == null) {
                     decimalField = parentDecimalDefault;
                 }
 
-                collectEntryForField(list, subName, subFieldType, bitField, decimalField, boolField, enumField);
+                collectEntryForField(list, subName, subFieldType, bitField, decimalField,
+                        boolField, enumField, stringField);
             }
         }
     }
 
     private record FieldEntry(String name, Class<?> type,
                                BitField bitField, DecimalField decimalField,
-                               BoolField boolField, EnumField enumField) {}
+                               BoolField boolField, EnumField enumField,
+                               StringField stringField) {}
 
     // -----------------------------------------------------------------------
     private static FieldLayout buildFieldLayout(FieldEntry e, int bitCursor) {
@@ -159,6 +173,9 @@ public final class LayoutBuilder {
         }
         if (e.enumField() != null) {
             return buildEnumFieldLayout(e, bitCursor);
+        }
+        if (e.stringField() != null) {
+            return buildStringFieldLayout(e, bitCursor);
         }
         throw new IllegalArgumentException(
                 "Field '" + e.name() + "' has no jBinary annotation");
@@ -235,6 +252,31 @@ public final class LayoutBuilder {
     public static int bitsRequired(long range) {
         if (range <= 0) return 1;
         return 64 - Long.numberOfLeadingZeros(range);
+    }
+
+    /**
+     * Builds the layout for a {@link io.github.zzuegg.jbinary.annotation.StringField}-annotated
+     * field.
+     *
+     * <p>Layout (contiguous bit region):
+     * <ul>
+     *   <li>{@code lengthBits} bits — actual string length (0..maxLength)</li>
+     *   <li>{@code maxLength × 16} bits — UTF-16 character slots</li>
+     * </ul>
+     *
+     * <p>The {@link FieldLayout} repurposes {@code minRaw} to hold {@code maxLength} and
+     * {@code scale} to hold {@code lengthBits}; both values are needed by
+     * {@link io.github.zzuegg.jbinary.accessor.StringAccessor}.
+     */
+    private static FieldLayout buildStringFieldLayout(FieldEntry e, int bitCursor) {
+        StringField ann = e.stringField();
+        int maxLength = ann.maxLength();
+        if (maxLength < 1) throw new IllegalArgumentException(
+                "StringField maxLength must be >= 1 for field '" + e.name() + "'");
+        int lengthBits = bitsRequired(maxLength);
+        int totalBits  = lengthBits + maxLength * 16;
+        // Repurpose minRaw = maxLength, scale = lengthBits
+        return new FieldLayout(e.name(), bitCursor, totalBits, maxLength, lengthBits);
     }
 
     private static long pow10(int n) {
