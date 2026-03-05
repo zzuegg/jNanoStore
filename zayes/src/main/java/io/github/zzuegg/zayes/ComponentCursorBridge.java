@@ -17,7 +17,6 @@ import java.lang.invoke.MethodHandles;
 import java.lang.invoke.MethodType;
 import java.lang.invoke.VarHandle;
 import java.lang.reflect.RecordComponent;
-import java.util.ArrayList;
 import java.util.List;
 
 /**
@@ -32,9 +31,11 @@ import java.util.List;
  * {@link java.lang.invoke.MethodHandle#invokeWithArguments} calls.
  *
  * <p><strong>Read path</strong> ({@link #read}):
- * {@code cursor.load(store, row)} → typed {@link VarHandle#getFloat}/{@code getInt}/…
- * per cursor field → {@code constructorHandle.invokeExact(v0,v1,…)} → one allocation,
- * no boxing, no {@code Object[]}.
+ * {@code cursor.load(store, row)} populates the cursor's primitive fields via PUTFIELD.
+ * A pre-built {@link MethodHandle} composed with {@link MethodHandles#filterArguments} and
+ * {@link MethodHandles#permuteArguments} then reads each field as an unboxed primitive via
+ * {@link VarHandle#toMethodHandle} GET and passes the values directly to the record
+ * constructor — zero {@code Object[]} allocation, zero primitive boxing.
  *
  * <p><strong>Write path</strong> ({@link #write}):
  * typed {@link VarHandle} / record-accessor {@link MethodHandle#invokeExact} reads
@@ -50,38 +51,33 @@ final class ComponentCursorBridge<T> {
 
     private final DataCursor<?>  cursor;
     private final Object         cursorInstance;
-    private final FieldBridge[]  bridges;       // one per field, ordered by layout
-    private final MethodHandle   constructor;   // T(f0, f1, …)
+    private final FieldBridge[]  bridges;       // one per field, ordered by layout (write path)
+    private final MethodHandle   typedReader;   // (Object) -> Object; reads all fields without boxing
 
     private ComponentCursorBridge(DataCursor<?> cursor,
                                    Object cursorInstance,
                                    FieldBridge[] bridges,
-                                   MethodHandle constructor) {
+                                   MethodHandle typedReader) {
         this.cursor         = cursor;
         this.cursorInstance = cursorInstance;
         this.bridges        = bridges;
-        this.constructor    = constructor;
+        this.typedReader    = typedReader;
     }
 
     // -----------------------------------------------------------------------
     // Hot-path operations
 
-    /** Reads all component fields from the store and returns a new {@code T} instance. */
+    /**
+     * Reads all component fields from the store and returns a new {@code T} instance.
+     *
+     * <p>Uses a pre-built MethodHandle that reads each cursor field as an unboxed
+     * primitive and passes the values directly to the record constructor.
+     */
     @SuppressWarnings("unchecked")
     T read(DataStore<?> store, int row) {
         cursor.load(store, row);
         try {
-            // Collect field values from the cursor into a typed Object[] then invokeWithArguments.
-            // Field values are already primitives inside the cursor; reads via VarHandle are unboxed
-            // at the call-site (getFloat / getInt / …) and boxing only occurs when passed to
-            // invokeWithArguments.  This is still faster than RowView.get() because:
-            //   1. cursor.load() uses ByteBuddy PUTFIELD (faster than RowView's readBits path)
-            //   2. No intermediate Object[] for the accessor chain itself
-            Object[] args = new Object[bridges.length];
-            for (int i = 0; i < bridges.length; i++) {
-                args[i] = bridges[i].getFromCursor(cursorInstance);
-            }
-            return (T) constructor.invokeWithArguments(args);
+            return (T) typedReader.invokeExact(cursorInstance);
         } catch (Throwable e) {
             throw new RuntimeException("ComponentCursorBridge.read failed", e);
         }
@@ -96,13 +92,11 @@ final class ComponentCursorBridge<T> {
     }
 
     // -----------------------------------------------------------------------
-    // Per-field bridge (reads one field from cursor / writes one field to cursor)
+    // Per-field bridge (writes one field from a component to the cursor)
 
     private interface FieldBridge {
-        /** Reads the field value from the cursor instance (returns boxed primitive). */
-        Object getFromCursor(Object cursorInst);
         /** Copies the field value from the source component to the cursor instance. */
-        void   copyFromComponent(Object component, Object cursorInst);
+        void copyFromComponent(Object component, Object cursorInst);
     }
 
     // -----------------------------------------------------------------------
@@ -156,7 +150,11 @@ final class ComponentCursorBridge<T> {
             MethodHandle ctor = findConstructor(componentClass, fields, compLookup);
             if (ctor == null) return null;
 
-            return new ComponentCursorBridge<>((DataCursor<T>) cursor, cursorInst, bridges, ctor);
+            // ── Step 5: build unboxed typed reader via MethodHandles composition ──────
+            MethodHandle typedReader = buildTypedReader(cursorClass, componentClass,
+                    fields, cursorLookup, ctor);
+
+            return new ComponentCursorBridge<>((DataCursor<T>) cursor, cursorInst, bridges, typedReader);
 
         } catch (Exception e) {
             return null;   // fall back to heap
@@ -231,6 +229,52 @@ final class ComponentCursorBridge<T> {
         return bridges;
     }
 
+    /**
+     * Builds a MethodHandle with erased type {@code (Object) -> Object} that, when called
+     * with the cursor instance, reads every field from the cursor as an <em>unboxed</em>
+     * primitive and invokes the component constructor directly — no {@code Object[]}
+     * allocation, no boxing of primitive values.
+     *
+     * <p>Composition:
+     * <ol>
+     *   <li>{@code getter[i]} — VarHandle GET accessor: {@code (CursorClass) -> Fi}</li>
+     *   <li>{@code filterArguments(ctor, 0, getters)} — chains getters as pre-filters for the
+     *       constructor: {@code (CursorClass × N) -> T}</li>
+     *   <li>{@code permuteArguments(…, {0,0,…})} — collapses N copies of the cursor argument
+     *       down to one: {@code (CursorClass) -> T}</li>
+     *   <li>{@code asType((Object) -> Object)} — erases types for uniform storage;
+     *       internally emits a {@code CHECKCAST}, no boxing.</li>
+     * </ol>
+     */
+    private static MethodHandle buildTypedReader(Class<?> cursorClass, Class<?> componentClass,
+                                                  List<FieldLayout> fields,
+                                                  MethodHandles.Lookup cursorLookup,
+                                                  MethodHandle ctor) throws Exception {
+        int n = fields.size();
+        MethodHandle[] getters = new MethodHandle[n];
+        for (int i = 0; i < n; i++) {
+            String name = fields.get(i).name();
+            Class<?> type = layoutFieldType(componentClass, name);
+            VarHandle vh = cursorLookup.findVarHandle(cursorClass, name, type);
+            // GET accessor: (CursorClass) -> primitiveType  — no boxing
+            getters[i] = vh.toMethodHandle(VarHandle.AccessMode.GET);
+        }
+
+        // filterArguments: ctor(getter0(cursor), getter1(cursor), …)
+        // result type: (CursorClass × n) -> T
+        MethodHandle filtered = MethodHandles.filterArguments(ctor, 0, getters);
+
+        // permuteArguments: collapse n CursorClass args into the single cursor arg
+        int[] reorder = new int[n];   // all zeros — every source slot maps to arg 0
+        MethodHandle typedReader = MethodHandles.permuteArguments(
+                filtered,
+                MethodType.methodType(componentClass, cursorClass),
+                reorder);
+
+        // Erase to (Object) -> Object for uniform storage and invokeExact call site
+        return typedReader.asType(MethodType.methodType(Object.class, Object.class));
+    }
+
     /** Finds either a record accessor or a plain field getter for the component. */
     private static MethodHandle findComponentReader(Class<?> cls, String name,
                                                      Class<?> type,
@@ -264,7 +308,7 @@ final class ComponentCursorBridge<T> {
     }
 
     // -----------------------------------------------------------------------
-    // VarHandle-based FieldBridge
+    // VarHandle-based FieldBridge (write path only)
 
     private static final class VarHandleFieldBridge implements FieldBridge {
         private final VarHandle    cursorVh;
@@ -275,11 +319,6 @@ final class ComponentCursorBridge<T> {
             this.cursorVh   = cursorVh;
             this.compReader = compReader;
             this.type       = type;
-        }
-
-        @Override
-        public Object getFromCursor(Object cursorInst) {
-            return cursorVh.get(cursorInst);   // boxed; used only in invokeWithArguments
         }
 
         @Override
