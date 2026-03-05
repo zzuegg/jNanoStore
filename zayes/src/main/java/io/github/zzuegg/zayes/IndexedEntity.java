@@ -48,11 +48,21 @@ public final class IndexedEntity implements Entity {
 
     @Override
     public void set(EntityComponent c) {
+        int index = indexedId.getIndex();
         // Write directly into the set's store so entity.get() reflects the value
         // immediately (matching DefaultEntityData's live-read contract).
-        owner.writeComponentDirect(indexedId.getIndex(), c);
-        // Propagate to the parent for authoritative storage and change notification.
-        ed.setComponent(indexedId.getEntityId(), c);
+        owner.writeComponentDirect(index, c);
+        // Record the local change so applyChanges() can populate changedEntities.
+        owner.markLocalChange(index);
+        // Suppress the listener callback for this set — the local store is already
+        // current — while still propagating to the parent for authoritative storage
+        // (and notification of *other* EntitySets).
+        owner.suppressNotification = true;
+        try {
+            ed.setComponent(indexedId.getEntityId(), c);
+        } finally {
+            owner.suppressNotification = false;
+        }
     }
 
     @Override

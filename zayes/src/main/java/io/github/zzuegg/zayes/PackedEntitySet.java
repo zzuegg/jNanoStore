@@ -26,6 +26,7 @@ import java.util.List;
 import java.util.NoSuchElementException;
 import java.util.Set;
 import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.BitSet;
 
 /**
  * A self-managing {@link EntitySet} that stores entity membership and component data
@@ -99,6 +100,17 @@ public final class PackedEntitySet extends AbstractSet<Entity> implements Entity
 
     private final ConcurrentLinkedQueue<EntityChange> pendingChanges = new ConcurrentLinkedQueue<>();
 
+    /**
+     * When {@code true}, incoming {@link #entityChange} notifications are suppressed.
+     * Set by {@link IndexedEntity#set} around the parent {@code setComponent()} call
+     * to avoid the redundant listener → queue → re-read round-trip for self-originated
+     * writes (the local store is already up-to-date via {@link #writeComponentDirect}).
+     */
+    boolean suppressNotification = false;
+
+    /** Dense-index bit set of entities changed locally via {@link IndexedEntity#set}. */
+    private final BitSet locallyChanged;
+
     private boolean filtersChanged = false;
     private boolean released = false;
 
@@ -155,6 +167,7 @@ public final class PackedEntitySet extends AbstractSet<Entity> implements Entity
 
         this.indexedIds      = new IndexedEntityId[capacity];
         this.entities        = new IndexedEntity[capacity];
+        this.locallyChanged  = new BitSet(capacity);
 
         loadInitialEntities();
     }
@@ -307,8 +320,13 @@ public final class PackedEntitySet extends AbstractSet<Entity> implements Entity
     // -----------------------------------------------------------------------
     // Change notification (called by PackedEntityData)
 
+    /** Marks an entity slot as locally changed (via {@link IndexedEntity#set}). */
+    void markLocalChange(int index) {
+        locallyChanged.set(index);
+    }
+
     void entityChange(EntityChange change) {
-        if (!released) {
+        if (!released && !suppressNotification) {
             pendingChanges.add(change);
         }
     }
@@ -328,7 +346,18 @@ public final class PackedEntitySet extends AbstractSet<Entity> implements Entity
             applyFilterChange();
         }
 
-        // Drain pending change notifications
+        // Flush locally-changed entities (self-originated writes via IndexedEntity.set).
+        // The local store is already up-to-date; we just need to populate changedEntities.
+        if (!locallyChanged.isEmpty()) {
+            for (int i = locallyChanged.nextSetBit(0); i >= 0; i = locallyChanged.nextSetBit(i + 1)) {
+                if (entities[i] != null) {
+                    changedEntities.add(entities[i]);
+                }
+            }
+            locallyChanged.clear();
+        }
+
+        // Drain pending change notifications (from external writers / other sets)
         EntityChange change;
         while ((change = pendingChanges.poll()) != null) {
             processChange(change);
@@ -346,6 +375,16 @@ public final class PackedEntitySet extends AbstractSet<Entity> implements Entity
         if (filtersChanged) {
             filtersChanged = false;
             applyFilterChange();
+        }
+
+        // Flush locally-changed entities
+        if (!locallyChanged.isEmpty()) {
+            for (int i = locallyChanged.nextSetBit(0); i >= 0; i = locallyChanged.nextSetBit(i + 1)) {
+                if (entities[i] != null) {
+                    changedEntities.add(entities[i]);
+                }
+            }
+            locallyChanged.clear();
         }
 
         EntityChange change;
