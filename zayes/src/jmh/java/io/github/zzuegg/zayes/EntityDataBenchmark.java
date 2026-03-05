@@ -14,20 +14,24 @@ import java.util.concurrent.TimeUnit;
  * JMH benchmark comparing {@link PackedEntityData} (BitKit-backed) against
  * {@link DefaultEntityData} (zay-es reference).
  *
- * <h3>Scenario</h3>
+ * <h3>Scenario — one full game-loop frame</h3>
+ * Each benchmark invocation measures a complete "physics integration" step:
  * <ol>
- *   <li>Bootstrap: create 1 000 entities each with {@link Position},
- *       {@link Orientation}, and {@link Speed} components.</li>
- *   <li>Benchmark loop: call {@code applyChanges()} on an {@link EntitySet}
- *       watching all three types, then iterate over every entity and read its
- *       {@link Position}.</li>
- *   <li>Position update: after every iteration a new {@link Position} is written
- *       to each entity to produce a realistic change-set on the next loop.</li>
+ *   <li>{@code applyChanges()} — absorb the position writes from the previous frame.</li>
+ *   <li>For every entity: read {@link Position}, {@link Orientation}, {@link Speed}.</li>
+ *   <li>Compute {@code newPosition = position + orientation * speed}.</li>
+ *   <li>Write {@code newPosition} back via {@code entity.set()} (which queues the change
+ *       for the next frame).</li>
  * </ol>
  *
- * <h3>Why these operations?</h3>
- * <p>A typical game-loop step is: detect changes → read components → write
- * updated state.  This benchmark covers all three phases.</p>
+ * <p>Using <em>records</em> for all three component types lets
+ * {@link PackedEntitySet} store their fields directly in a {@link io.github.zzuegg.jbinary.PackedDataStore}
+ * (raw IEEE-754 bits, no heap allocation per component read) instead of
+ * a plain {@code EntityComponent[]} array.
+ *
+ * <p>The two variants ({@code defaultEntityData} / {@code packedEntityData}) use
+ * fully independent {@link DefaultEntityData} instances so writes in one benchmark
+ * do not affect the other.
  */
 @BenchmarkMode(Mode.AverageTime)
 @OutputTimeUnit(TimeUnit.MICROSECONDS)
@@ -38,27 +42,14 @@ import java.util.concurrent.TimeUnit;
 public class EntityDataBenchmark {
 
     // -----------------------------------------------------------------------
-    // Component types
+    // Component types — records so PackedEntitySet can store them in the DataStore
 
-    static final class Position implements EntityComponent {
-        final float x, y, z;
-        Position(float x, float y, float z) { this.x = x; this.y = y; this.z = z; }
-    }
-
-    static final class Orientation implements EntityComponent {
-        final float yaw, pitch, roll;
-        Orientation(float yaw, float pitch, float roll) {
-            this.yaw = yaw; this.pitch = pitch; this.roll = roll;
-        }
-    }
-
-    static final class Speed implements EntityComponent {
-        final float value;
-        Speed(float value) { this.value = value; }
-    }
+    record Position(float x, float y, float z)       implements EntityComponent {}
+    record Orientation(float yaw, float pitch, float roll) implements EntityComponent {}
+    record Speed(float value)                         implements EntityComponent {}
 
     // -----------------------------------------------------------------------
-    // Benchmark parameters
+    // Benchmark parameter
 
     @Param({"1000"})
     int entityCount;
@@ -71,8 +62,9 @@ public class EntityDataBenchmark {
     private EntityId[]         defaultIds;
 
     // -----------------------------------------------------------------------
-    // Packed (BitKit-backed) state
+    // Packed (BitKit-backed) state — separate underlying EntityData instance
 
+    private DefaultEntityData  packedUnderlyingEd;
     private PackedEntityData   packedEd;
     private EntitySet          packedSet;
     private EntityId[]         packedIds;
@@ -83,21 +75,29 @@ public class EntityDataBenchmark {
     @Setup(Level.Trial)
     public void setupTrial() {
         // --- Default ---
-        defaultEd = new DefaultEntityData();
+        defaultEd  = new DefaultEntityData();
         defaultIds = new EntityId[entityCount];
         for (int i = 0; i < entityCount; i++) {
             defaultIds[i] = defaultEd.createEntity();
             defaultEd.setComponents(defaultIds[i],
                     new Position(i, i * 0.5f, i * 0.25f),
                     new Orientation(i * 0.1f, i * 0.2f, i * 0.3f),
-                    new Speed(i * 1.5f));
+                    new Speed(1.0f + i * 0.001f));
         }
         defaultSet = defaultEd.getEntities(Position.class, Orientation.class, Speed.class);
         defaultSet.applyChanges();
 
-        // --- Packed ---
-        packedEd = new PackedEntityData(defaultEd);
-        packedIds = defaultIds;         // share the same EntityIds
+        // --- Packed (independent data, same initial values) ---
+        packedUnderlyingEd = new DefaultEntityData();
+        packedIds = new EntityId[entityCount];
+        for (int i = 0; i < entityCount; i++) {
+            packedIds[i] = packedUnderlyingEd.createEntity();
+            packedUnderlyingEd.setComponents(packedIds[i],
+                    new Position(i, i * 0.5f, i * 0.25f),
+                    new Orientation(i * 0.1f, i * 0.2f, i * 0.3f),
+                    new Speed(1.0f + i * 0.001f));
+        }
+        packedEd  = new PackedEntityData(packedUnderlyingEd);
         packedSet = packedEd.getEntities(Position.class, Orientation.class, Speed.class);
         packedSet.applyChanges();
     }
@@ -107,43 +107,53 @@ public class EntityDataBenchmark {
         defaultSet.release();
         packedSet.release();
         defaultEd.close();
-        // packedEd.close() would also close defaultEd (it delegates); skip double-close
-    }
-
-    // Update state shared across iterations: write new positions so there are
-    // always pending changes on the next invocation.
-    @Setup(Level.Invocation)
-    public void writeNewPositions() {
-        for (int i = 0; i < entityCount; i++) {
-            defaultEd.setComponent(defaultIds[i],
-                    new Position(i + 0.1f, i * 0.5f + 0.1f, i * 0.25f + 0.1f));
-        }
+        packedEd.close();
     }
 
     // -----------------------------------------------------------------------
     // Benchmarks
+    //
+    // Each invocation is one complete game-loop frame:
+    //   applyChanges()  →  for each entity: read pos/ori/spd, compute new pos, write back
 
     /**
-     * Baseline: apply changes on the zay-es {@link DefaultEntityData} set, then
-     * read every entity's {@link Position}.
+     * Baseline: zay-es {@link DefaultEntityData}.
      */
     @Benchmark
-    public void defaultEntityData_applyAndRead(Blackhole bh) {
+    public void defaultEntityData_gameLoop(Blackhole bh) {
         defaultSet.applyChanges();
         for (var entity : defaultSet) {
-            bh.consume(entity.get(Position.class));
+            Position    pos = entity.get(Position.class);
+            Orientation ori = entity.get(Orientation.class);
+            Speed       spd = entity.get(Speed.class);
+            Position newPos = new Position(
+                    pos.x() + ori.yaw()   * spd.value(),
+                    pos.y() + ori.pitch() * spd.value(),
+                    pos.z() + ori.roll()  * spd.value());
+            entity.set(newPos);
+            bh.consume(newPos);
         }
     }
 
     /**
-     * Target: apply changes on the {@link PackedEntityData} set, then read every
-     * entity's {@link Position}.
+     * Target: {@link PackedEntityData} backed by BitKit {@link io.github.zzuegg.jbinary.PackedDataStore}.
+     * Component fields are stored as raw IEEE-754 bits; reads reconstruct record instances
+     * without touching the GC heap for the component data itself.
      */
     @Benchmark
-    public void packedEntityData_applyAndRead(Blackhole bh) {
+    public void packedEntityData_gameLoop(Blackhole bh) {
         packedSet.applyChanges();
         for (var entity : packedSet) {
-            bh.consume(entity.get(Position.class));
+            Position    pos = entity.get(Position.class);
+            Orientation ori = entity.get(Orientation.class);
+            Speed       spd = entity.get(Speed.class);
+            Position newPos = new Position(
+                    pos.x() + ori.yaw()   * spd.value(),
+                    pos.y() + ori.pitch() * spd.value(),
+                    pos.z() + ori.roll()  * spd.value());
+            entity.set(newPos);
+            bh.consume(newPos);
         }
     }
 }
+

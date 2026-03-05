@@ -206,7 +206,7 @@ public final class LayoutBuilder {
     @SuppressWarnings({"unchecked", "rawtypes"})
     private static FieldLayout buildNativeFieldLayout(FieldEntry e, int bitCursor) {
         Class<?> t = e.type();
-        if (t == boolean.class)  return new FieldLayout(e.name(), bitCursor, 1,  0L, 1L);
+        if (t == boolean.class)  return new FieldLayout(e.name(), bitCursor, 1,  0L, 1L);  // scale=1 matches @BoolField convention; BoolAccessor ignores scale
         if (t == byte.class)     return new FieldLayout(e.name(), bitCursor, 8,  Byte.MIN_VALUE,  1L);
         if (t == short.class)    return new FieldLayout(e.name(), bitCursor, 16, Short.MIN_VALUE, 1L);
         if (t == char.class)     return new FieldLayout(e.name(), bitCursor, 16, 0L, 1L);

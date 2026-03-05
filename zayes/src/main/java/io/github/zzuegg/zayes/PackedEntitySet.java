@@ -10,41 +10,47 @@ import com.simsilica.es.EntitySet;
 
 import io.github.zzuegg.jbinary.Accessors;
 import io.github.zzuegg.jbinary.DataStore;
+import io.github.zzuegg.jbinary.RowView;
 import io.github.zzuegg.jbinary.accessor.BoolAccessor;
 import io.github.zzuegg.jbinary.annotation.BoolField;
+import io.github.zzuegg.jbinary.schema.LayoutBuilder;
 
 import java.util.AbstractSet;
 import java.util.ArrayDeque;
-import java.util.Arrays;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Iterator;
+import java.util.List;
 import java.util.NoSuchElementException;
 import java.util.Set;
 import java.util.concurrent.ConcurrentLinkedQueue;
 
 /**
- * A self-managing {@link EntitySet} implementation that stores entity membership
+ * A self-managing {@link EntitySet} that stores entity membership and component data
  * using a BitKit {@link DataStore} keyed by a dense {@link IndexedEntityId#getIndex()}.
  *
- * <p>Instead of an internally-managed {@code HashMap<EntityId, Entity>} (like
- * {@code DefaultEntitySet}), this set maintains:
- * <ul>
- *   <li>A packed {@link DataStore} with a single {@code @BoolField present} bit per
- *       slot, enabling O(1) membership checks without hash-collision overhead.</li>
- *   <li>Flat {@code EntityComponent[][]} arrays — one per tracked component type —
- *       indexed by the dense entity index for O(1) component reads.</li>
- * </ul>
+ * <h3>Storage strategy (decided once at construction time)</h3>
+ * <p>For each tracked component type, the constructor attempts to register it in a
+ * shared {@link DataStore} (using {@link LayoutBuilder} + {@link RowView}).  Types
+ * whose layout can be inferred — records or plain classes with primitive / unannotated
+ * fields — are stored bit-packed in the store.  Types that cannot be represented
+ * (e.g. zero-field markers, classes with {@link String} fields without
+ * {@link io.github.zzuegg.jbinary.annotation.StringField}, or plain classes lacking
+ * a no-arg constructor) fall back to a plain {@code EntityComponent[]} heap array.
+ * This decision is made <em>once</em> during construction and never re-evaluated at
+ * runtime.
  *
- * <p>Change notifications arrive via {@link #entityChange(EntityChange)}, called by
- * the owning {@link PackedEntityData}.  Changes are queued and only applied (and the
- * change-delta sets populated) when {@link #applyChanges()} is invoked.
+ * <h3>Change tracking</h3>
+ * <p>Change notifications arrive via {@link #entityChange(EntityChange)}, pushed by the
+ * owning {@link PackedEntityData}, and are applied — populating the added/changed/removed
+ * change-delta sets — only when {@link #applyChanges()} is invoked.
  */
 public final class PackedEntitySet extends AbstractSet<Entity> implements EntitySet {
 
     // -----------------------------------------------------------------------
-    // Internal membership record for the DataStore
+    // Membership marker (1 bit per entity slot in the shared store)
     record MembershipRecord(@BoolField boolean present) {}
 
     // -----------------------------------------------------------------------
@@ -59,15 +65,22 @@ public final class PackedEntitySet extends AbstractSet<Entity> implements Entity
     private int nextIndex = 0;
     private final ArrayDeque<Integer> freeIndices = new ArrayDeque<>();
 
-    /** PackedDataStore with one membership bit per entity slot. */
-    private final DataStore<MembershipRecord> store;
+    /** Packed store holding MembershipRecord + all store-backed component types. */
+    private final DataStore<?> store;
     private final BoolAccessor presentAccessor;
 
     /**
-     * Per-component-type flat arrays. {@code components[ti][ei]} holds the
-     * component object for type index {@code ti} at entity index {@code ei}.
+     * Per-type RowView. {@code rowViews[ti] != null} iff component type {@code ti} is
+     * stored in the packed store; {@code null} means heap fallback.
      */
-    private final EntityComponent[][] components;
+    @SuppressWarnings("rawtypes")
+    private final RowView[] rowViews;
+
+    /**
+     * Heap-fallback arrays. {@code heapComponents[ti] != null} iff component type
+     * {@code ti} could <em>not</em> be stored in the packed store.
+     */
+    private final EntityComponent[][] heapComponents;
 
     /** Dense index → IndexedEntityId (null if slot is free). */
     private final IndexedEntityId[] indexedIds;
@@ -75,17 +88,15 @@ public final class PackedEntitySet extends AbstractSet<Entity> implements Entity
     /** Dense index → IndexedEntity (null if slot is free). */
     private final IndexedEntity[] entities;
 
-    /** EntityId (as long) → dense index. */
+    /** EntityId (raw long) → dense index. */
     private final HashMap<Long, Integer> idToIndex = new HashMap<>();
 
     private int size = 0;
 
-    // Change sets (replaced on each applyChanges() call)
     private Set<Entity> addedEntities   = new HashSet<>();
     private Set<Entity> changedEntities = new HashSet<>();
     private Set<Entity> removedEntities = new HashSet<>();
 
-    /** Thread-safe queue for incoming change notifications. */
     private final ConcurrentLinkedQueue<EntityChange> pendingChanges = new ConcurrentLinkedQueue<>();
 
     private boolean filtersChanged = false;
@@ -94,7 +105,7 @@ public final class PackedEntitySet extends AbstractSet<Entity> implements Entity
     // -----------------------------------------------------------------------
     // Constructor
 
-    @SuppressWarnings("unchecked")
+    @SuppressWarnings({"unchecked", "rawtypes"})
     PackedEntitySet(EntityData parent, ComponentFilter filter,
                     Class<?>[] rawTypes, int capacity) {
         this.parent   = parent;
@@ -106,18 +117,51 @@ public final class PackedEntitySet extends AbstractSet<Entity> implements Entity
             this.types[i] = (Class<EntityComponent>) rawTypes[i];
         }
 
-        this.store           = DataStore.packed(capacity, MembershipRecord.class);
+        // ── Phase 1: determine which component types can be stored in the DataStore ──
+        // Check once at construction; results drive all subsequent operations.
+        boolean[] canUseStore = new boolean[rawTypes.length];
+        List<Class<?>> storeClasses = new ArrayList<>();
+        storeClasses.add(MembershipRecord.class);
+        for (int i = 0; i < rawTypes.length; i++) {
+            try {
+                LayoutBuilder.layout(rawTypes[i]);     // throws if layout cannot be inferred
+                canUseStore[i] = true;
+                storeClasses.add(rawTypes[i]);
+            } catch (Exception ignored) {
+                canUseStore[i] = false;
+            }
+        }
+
+        // ── Phase 2: build the single shared DataStore ──
+        this.store = DataStore.packed(capacity, storeClasses.toArray(new Class<?>[0]));
         this.presentAccessor = Accessors.boolFieldInStore(store, MembershipRecord.class, "present");
 
-        this.components = new EntityComponent[types.length][capacity];
+        // ── Phase 3: build RowViews for storable types; allocate heap arrays for others ──
+        this.rowViews       = new RowView[rawTypes.length];
+        this.heapComponents = new EntityComponent[rawTypes.length][];
+        for (int i = 0; i < rawTypes.length; i++) {
+            if (canUseStore[i]) {
+                try {
+                    rowViews[i] = RowView.of(store, rawTypes[i]);
+                } catch (Exception ignored) {
+                    // RowView construction failed (e.g. no no-arg constructor for plain class)
+                    // — fall back to heap for this type
+                    rowViews[i] = null;
+                    heapComponents[i] = new EntityComponent[capacity];
+                }
+            } else {
+                heapComponents[i] = new EntityComponent[capacity];
+            }
+        }
+
         this.indexedIds = new IndexedEntityId[capacity];
         this.entities   = new IndexedEntity[capacity];
 
-        // Bootstrap: load the initial matching entities from the parent
         loadInitialEntities();
     }
 
     // -----------------------------------------------------------------------
+    // Bootstrap
     // Bootstrap helpers
 
     @SuppressWarnings("unchecked")
@@ -163,7 +207,13 @@ public final class PackedEntitySet extends AbstractSet<Entity> implements Entity
 
         presentAccessor.set(store, index, true);
         for (int ti = 0; ti < types.length; ti++) {
-            components[ti][index] = comps[ti];
+            if (rowViews[ti] != null) {
+                @SuppressWarnings("unchecked")
+                RowView<EntityComponent> rv = (RowView<EntityComponent>) rowViews[ti];
+                rv.set(store, index, comps[ti]);
+            } else {
+                heapComponents[ti][index] = comps[ti];
+            }
         }
         indexedIds[index] = iid;
         entities[index]   = ie;
@@ -174,7 +224,10 @@ public final class PackedEntitySet extends AbstractSet<Entity> implements Entity
     private void removeEntity(int index) {
         presentAccessor.set(store, index, false);
         for (int ti = 0; ti < types.length; ti++) {
-            components[ti][index] = null;
+            if (heapComponents[ti] != null) {
+                heapComponents[ti][index] = null;
+            }
+            // store-backed slots need no explicit clear; next putEntity overwrites them
         }
         indexedIds[index] = null;
         entities[index]   = null;
@@ -207,23 +260,46 @@ public final class PackedEntitySet extends AbstractSet<Entity> implements Entity
     // -----------------------------------------------------------------------
     // Package-private accessors for IndexedEntity
 
+    /**
+     * Writes a single component directly into the store/heap for the given dense index.
+     * Called from {@link IndexedEntity#set} before the parent's change notification fires,
+     * so the store is already up to date when {@link #processChange} runs.
+     */
+    @SuppressWarnings("unchecked")
+    void writeComponentDirect(int index, EntityComponent c) {
+        int ti = typeIndex(c.getClass());
+        if (ti < 0) return;
+        if (rowViews[ti] != null) {
+            ((RowView<EntityComponent>) rowViews[ti]).set(store, index, c);
+        } else {
+            heapComponents[ti][index] = c;
+        }
+    }
+
     EntityComponent getComponentForIndex(int index, Class<?> type) {
         int ti = typeIndex((Class<EntityComponent>) type);
         if (ti < 0) return null;
-        return components[ti][index];
+        if (rowViews[ti] != null) {
+            return (EntityComponent) rowViews[ti].get(store, index);
+        }
+        return heapComponents[ti][index];
     }
 
     boolean isEntityComplete(int index) {
-        for (int ti = 0; ti < types.length; ti++) {
-            if (components[ti][index] == null) return false;
-        }
-        return true;
+        // An entity is complete iff it is present in the set.
+        // putEntity writes all component slots before setting the present bit, so
+        // presence implies all components (both store-backed and heap-backed) are populated.
+        return presentAccessor.get(store, index);
     }
 
     EntityComponent[] getComponentsForIndex(int index) {
         EntityComponent[] result = new EntityComponent[types.length];
         for (int ti = 0; ti < types.length; ti++) {
-            result[ti] = components[ti][index];
+            if (rowViews[ti] != null) {
+                result[ti] = (EntityComponent) rowViews[ti].get(store, index);
+            } else {
+                result[ti] = heapComponents[ti][index];
+            }
         }
         return result;
     }
@@ -289,32 +365,55 @@ public final class PackedEntitySet extends AbstractSet<Entity> implements Entity
     private void processChange(EntityChange change) {
         EntityId eid = change.getEntityId();
         Class<EntityComponent> changedType = (Class<EntityComponent>) change.getComponentType();
+        int changedTi = typeIndex(changedType);
 
-        // Only react to changes that involve types we care about
-        boolean relevant = typeIndex(changedType) >= 0
+        // Only react to changes that involve types we track or that affect the active filter
+        boolean relevant = changedTi >= 0
                 || (filter != null && filter.getComponentType() == changedType);
         if (!relevant) return;
 
         Integer idx = idToIndex.get(eid.getId());
 
         if (idx != null) {
-            // Entity is currently in the set — check if it still matches
-            EntityComponent[] comps = loadComponentsFromParent(eid);
-            IndexedEntity ie = entities[idx];
-            if (comps != null) {
-                // Still matches — update component data
-                for (int ti = 0; ti < types.length; ti++) {
-                    components[ti][idx] = comps[ti];
-                }
-                changedEntities.add(ie);
-            } else {
-                // No longer matches — remove it
-                removedEntities.add(ie);
+            // Entity is already in the set.
+            //
+            // Fast path: if this is a tracked, store-backed type and there is no active
+            // filter on it, the store was already written by IndexedEntity.set() before
+            // the notification was queued — just mark changed and return.
+            boolean needsFilterCheck = filter != null
+                    && filter.getComponentType() == changedType;
+            if (changedTi >= 0 && rowViews[changedTi] != null && !needsFilterCheck) {
+                changedEntities.add(entities[idx]);
+                return;
+            }
+
+            // Slower path: fetch from parent to check for removal or filter failure,
+            // and update heap-backed components.
+            EntityComponent newComp = parent.getComponent(eid, changedType);
+
+            if (newComp == null) {
+                // A required tracked component was removed — entity leaves the set
+                removedEntities.add(entities[idx]);
                 idToIndex.remove(eid.getId());
                 removeEntity(idx);
+                return;
             }
+
+            // Re-evaluate filter if the changed component is the filter component
+            if (needsFilterCheck && !filter.evaluate(newComp)) {
+                removedEntities.add(entities[idx]);
+                idToIndex.remove(eid.getId());
+                removeEntity(idx);
+                return;
+            }
+
+            // For heap-backed tracked types, persist the new value
+            if (changedTi >= 0 && heapComponents[changedTi] != null) {
+                heapComponents[changedTi][idx] = newComp;
+            }
+            changedEntities.add(entities[idx]);
         } else {
-            // Entity is not in the set — check if it now matches
+            // Entity is not in the set — load all components to see if it now qualifies
             EntityComponent[] comps = loadComponentsFromParent(eid);
             if (comps != null) {
                 int index = allocateIndex();

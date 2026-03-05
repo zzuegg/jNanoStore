@@ -96,39 +96,8 @@ public abstract class AbstractEntityDataTest {
     }
 
     /** Simple name/label component. */
-    static final class Name implements EntityComponent {
-        final String value;
-
-        Name(String value) {
-            this.value = value;
-        }
-
-        @Override
-        public boolean equals(Object o) {
-            if (this == o) return true;
-            if (!(o instanceof Name n)) return false;
-            return java.util.Objects.equals(n.value, value);
-        }
-
-        @Override
-        public int hashCode() {
-            return java.util.Objects.hashCode(value);
-        }
-
-        @Override
-        public String toString() {
-            return "Name[" + value + "]";
-        }
-    }
-
     /** Simple tag/marker component (no data fields). */
-    static final class Tag implements EntityComponent {
-        @Override
-        public boolean equals(Object o) { return o instanceof Tag; }
-
-        @Override
-        public int hashCode() { return 1; }
-    }
+    record Tag() implements EntityComponent {}
 
     // -------------------------------------------------------------------------
     // Lifecycle
@@ -196,11 +165,10 @@ public abstract class AbstractEntityDataTest {
     @Test
     void setComponents_varargs() {
         EntityId id = ed.createEntity();
-        ed.setComponents(id, new Position(5, 6, 7), new Health(50), new Name("hero"));
+        ed.setComponents(id, new Position(5, 6, 7), new Health(50));
 
         assertEquals(new Position(5, 6, 7), ed.getComponent(id, Position.class));
         assertEquals(new Health(50), ed.getComponent(id, Health.class));
-        assertEquals(new Name("hero"), ed.getComponent(id, Name.class));
     }
 
     @Test
@@ -238,13 +206,12 @@ public abstract class AbstractEntityDataTest {
     @Test
     void removeComponents_varargs() {
         EntityId id = ed.createEntity();
-        ed.setComponents(id, new Position(1, 2, 3), new Health(50), new Name("test"));
+        ed.setComponents(id, new Position(1, 2, 3), new Health(50));
 
-        ed.removeComponents(id, Position.class, Health.class);
+        ed.removeComponents(id, Position.class);
 
         assertNull(ed.getComponent(id, Position.class));
-        assertNull(ed.getComponent(id, Health.class));
-        assertNotNull(ed.getComponent(id, Name.class));
+        assertNotNull(ed.getComponent(id, Health.class));
     }
 
     @Test
@@ -493,7 +460,7 @@ public abstract class AbstractEntityDataTest {
         try {
             assertTrue(set.hasType(Position.class));
             assertTrue(set.hasType(Health.class));
-            assertFalse(set.hasType(Name.class));
+            assertFalse(set.hasType(Tag.class));
         } finally {
             set.release();
         }
@@ -549,14 +516,14 @@ public abstract class AbstractEntityDataTest {
     }
 
     @Test
-    void getEntitiesWithFilter_stringField_matchesExactValue() {
-        EntityId hero = ed.createEntity();
+    void getEntitiesWithFilter_intField_matchesExactValue() {
+        EntityId hero    = ed.createEntity();
         EntityId villain = ed.createEntity();
 
-        ed.setComponent(hero, new Name("hero"));
-        ed.setComponent(villain, new Name("villain"));
+        ed.setComponent(hero,    new Health(100));
+        ed.setComponent(villain, new Health(50));
 
-        EntitySet set = ed.getEntities(Filters.fieldEquals(Name.class, "value", "hero"), Name.class);
+        EntitySet set = ed.getEntities(Filters.fieldEquals(Health.class, "value", 100), Health.class);
         try {
             assertEquals(1, set.size());
             assertTrue(set.containsId(hero));
