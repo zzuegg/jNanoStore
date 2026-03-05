@@ -165,7 +165,15 @@ final class CursorCodecGenerator {
             spec.vh().set(inst, a.get(store, row));
         } else if (acc instanceof io.github.zzuegg.jbinary.accessor.DoubleBitsAccessor a) {
             spec.vh().set(inst, a.get(store, row));
+        } else if (acc instanceof io.github.zzuegg.jbinary.accessor.StringAccessor a) {
+            spec.vh().set(inst, a.get(store, row));
+        } else if (acc instanceof io.github.zzuegg.jbinary.accessor.EnumAccessor<?> a) {
+            spec.vh().set(inst, a.get(store, row));
         }
+    }
+
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    private static void applyFlush(FieldSpec spec, Object inst, DataStore<?> store, int row) {
         Object acc = spec.accessor();
         if (acc instanceof io.github.zzuegg.jbinary.accessor.IntAccessor a) {
             a.set(store, row, (int) spec.vh().get(inst));

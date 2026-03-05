@@ -10,7 +10,6 @@ import com.simsilica.es.EntitySet;
 
 import io.github.zzuegg.jbinary.Accessors;
 import io.github.zzuegg.jbinary.DataStore;
-import io.github.zzuegg.jbinary.RowView;
 import io.github.zzuegg.jbinary.accessor.BoolAccessor;
 import io.github.zzuegg.jbinary.annotation.BoolField;
 import io.github.zzuegg.jbinary.schema.LayoutBuilder;
@@ -33,7 +32,7 @@ import java.util.concurrent.ConcurrentLinkedQueue;
  *
  * <h3>Storage strategy (decided once at construction time)</h3>
  * <p>For each tracked component type, the constructor attempts to register it in a
- * shared {@link DataStore} (using {@link LayoutBuilder} + {@link RowView}).  Types
+ * shared {@link DataStore} (using {@link LayoutBuilder} + {@link ComponentCursorBridge}).  Types
  * whose layout can be inferred — records or plain classes with primitive / unannotated
  * fields — are stored bit-packed in the store.  Types that cannot be represented
  * (e.g. zero-field markers, classes with {@link String} fields without
@@ -70,11 +69,11 @@ public final class PackedEntitySet extends AbstractSet<Entity> implements Entity
     private final BoolAccessor presentAccessor;
 
     /**
-     * Per-type RowView. {@code rowViews[ti] != null} iff component type {@code ti} is
+     * Per-type cursor bridge. {@code bridges[ti] != null} iff component type {@code ti} is
      * stored in the packed store; {@code null} means heap fallback.
      */
     @SuppressWarnings("rawtypes")
-    private final RowView[] rowViews;
+    private final ComponentCursorBridge[] bridges;
 
     /**
      * Heap-fallback arrays. {@code heapComponents[ti] != null} iff component type
@@ -136,17 +135,16 @@ public final class PackedEntitySet extends AbstractSet<Entity> implements Entity
         this.store = DataStore.packed(capacity, storeClasses.toArray(new Class<?>[0]));
         this.presentAccessor = Accessors.boolFieldInStore(store, MembershipRecord.class, "present");
 
-        // ── Phase 3: build RowViews for storable types; allocate heap arrays for others ──
-        this.rowViews       = new RowView[rawTypes.length];
+        // ── Phase 3: build ComponentCursorBridges for storable types; allocate heap arrays for others ──
+        this.bridges        = new ComponentCursorBridge[rawTypes.length];
         this.heapComponents = new EntityComponent[rawTypes.length][];
         for (int i = 0; i < rawTypes.length; i++) {
             if (canUseStore[i]) {
-                try {
-                    rowViews[i] = RowView.of(store, rawTypes[i]);
-                } catch (Exception ignored) {
-                    // RowView construction failed (e.g. no no-arg constructor for plain class)
-                    // — fall back to heap for this type
-                    rowViews[i] = null;
+                ComponentCursorBridge<?> bridge = ComponentCursorBridge.tryCreate(store, rawTypes[i]);
+                if (bridge != null) {
+                    bridges[i] = bridge;
+                } else {
+                    // ComponentCursorBridge failed (e.g. no suitable constructor) — fall back to heap
                     heapComponents[i] = new EntityComponent[capacity];
                 }
             } else {
@@ -207,10 +205,10 @@ public final class PackedEntitySet extends AbstractSet<Entity> implements Entity
 
         presentAccessor.set(store, index, true);
         for (int ti = 0; ti < types.length; ti++) {
-            if (rowViews[ti] != null) {
+            if (bridges[ti] != null) {
                 @SuppressWarnings("unchecked")
-                RowView<EntityComponent> rv = (RowView<EntityComponent>) rowViews[ti];
-                rv.set(store, index, comps[ti]);
+                ComponentCursorBridge<EntityComponent> bridge = bridges[ti];
+                bridge.write(store, index, comps[ti]);
             } else {
                 heapComponents[ti][index] = comps[ti];
             }
@@ -269,8 +267,8 @@ public final class PackedEntitySet extends AbstractSet<Entity> implements Entity
     void writeComponentDirect(int index, EntityComponent c) {
         int ti = typeIndex(c.getClass());
         if (ti < 0) return;
-        if (rowViews[ti] != null) {
-            ((RowView<EntityComponent>) rowViews[ti]).set(store, index, c);
+        if (bridges[ti] != null) {
+            ((ComponentCursorBridge<EntityComponent>) bridges[ti]).write(store, index, c);
         } else {
             heapComponents[ti][index] = c;
         }
@@ -279,8 +277,8 @@ public final class PackedEntitySet extends AbstractSet<Entity> implements Entity
     EntityComponent getComponentForIndex(int index, Class<?> type) {
         int ti = typeIndex((Class<EntityComponent>) type);
         if (ti < 0) return null;
-        if (rowViews[ti] != null) {
-            return (EntityComponent) rowViews[ti].get(store, index);
+        if (bridges[ti] != null) {
+            return ((ComponentCursorBridge<EntityComponent>) bridges[ti]).read(store, index);
         }
         return heapComponents[ti][index];
     }
@@ -295,8 +293,8 @@ public final class PackedEntitySet extends AbstractSet<Entity> implements Entity
     EntityComponent[] getComponentsForIndex(int index) {
         EntityComponent[] result = new EntityComponent[types.length];
         for (int ti = 0; ti < types.length; ti++) {
-            if (rowViews[ti] != null) {
-                result[ti] = (EntityComponent) rowViews[ti].get(store, index);
+            if (bridges[ti] != null) {
+                result[ti] = ((ComponentCursorBridge<EntityComponent>) bridges[ti]).read(store, index);
             } else {
                 result[ti] = heapComponents[ti][index];
             }
@@ -376,19 +374,10 @@ public final class PackedEntitySet extends AbstractSet<Entity> implements Entity
 
         if (idx != null) {
             // Entity is already in the set.
-            //
-            // Fast path: if this is a tracked, store-backed type and there is no active
-            // filter on it, the store was already written by IndexedEntity.set() before
-            // the notification was queued — just mark changed and return.
             boolean needsFilterCheck = filter != null
                     && filter.getComponentType() == changedType;
-            if (changedTi >= 0 && rowViews[changedTi] != null && !needsFilterCheck) {
-                changedEntities.add(entities[idx]);
-                return;
-            }
 
-            // Slower path: fetch from parent to check for removal or filter failure,
-            // and update heap-backed components.
+            // Fetch from parent to check for removal or filter failure.
             EntityComponent newComp = parent.getComponent(eid, changedType);
 
             if (newComp == null) {
@@ -407,9 +396,14 @@ public final class PackedEntitySet extends AbstractSet<Entity> implements Entity
                 return;
             }
 
-            // For heap-backed tracked types, persist the new value
-            if (changedTi >= 0 && heapComponents[changedTi] != null) {
-                heapComponents[changedTi][idx] = newComp;
+            // Persist the new value — store-backed or heap-backed
+            if (changedTi >= 0) {
+                if (bridges[changedTi] != null) {
+                    ((ComponentCursorBridge<EntityComponent>) bridges[changedTi])
+                            .write(store, idx, newComp);
+                } else if (heapComponents[changedTi] != null) {
+                    heapComponents[changedTi][idx] = newComp;
+                }
             }
             changedEntities.add(entities[idx]);
         } else {

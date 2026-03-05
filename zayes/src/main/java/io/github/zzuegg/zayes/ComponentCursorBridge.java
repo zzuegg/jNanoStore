@@ -45,6 +45,9 @@ import java.util.List;
  */
 final class ComponentCursorBridge<T> {
 
+    private static final java.util.concurrent.atomic.AtomicInteger COUNTER =
+            new java.util.concurrent.atomic.AtomicInteger();
+
     private final DataCursor<?>  cursor;
     private final Object         cursorInstance;
     private final FieldBridge[]  bridges;       // one per field, ordered by layout
@@ -165,7 +168,7 @@ final class ComponentCursorBridge<T> {
 
     private static Class<?> generateCursorClass(Class<?> componentClass,
                                                   List<FieldLayout> fields) throws Exception {
-        String name = componentClass.getName() + "$$Cursor";
+        String name = componentClass.getName() + "$$Cursor$$" + COUNTER.incrementAndGet();
 
         var builder = new ByteBuddy().subclass(Object.class).name(name);
 
