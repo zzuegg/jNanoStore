@@ -18,6 +18,7 @@ import io.github.zzuegg.jbinary.schema.LayoutBuilder;
 import java.util.AbstractSet;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -159,8 +160,71 @@ public final class PackedEntitySet extends AbstractSet<Entity> implements Entity
         loadInitialEntities();
     }
 
+    /**
+     * Alternative constructor for use when the initial entity set is already known
+     * (e.g. by {@link BitKitEntityData}), avoiding a recursive {@code parent.getEntities()}
+     * call during bootstrap.
+     *
+     * <p>The {@code parent} {@link EntityData} is still used for component reads
+     * ({@link EntityData#getComponent}) and write-through ({@link IndexedEntity#set}).
+     *
+     * @param parent       the {@link EntityData} used for component reads and write-through
+     * @param filter       optional component filter, or {@code null}
+     * @param rawTypes     the component types tracked by this set
+     * @param capacity     maximum number of entity slots in the packed store
+     * @param bootstrapIds the initial entity IDs to populate the set with
+     */
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    PackedEntitySet(EntityData parent, ComponentFilter filter,
+                    Class<?>[] rawTypes, int capacity,
+                    Collection<EntityId> bootstrapIds) {
+        this.parent   = parent;
+        this.filter   = filter;
+        this.capacity = capacity;
+
+        this.types = new Class[rawTypes.length];
+        for (int i = 0; i < rawTypes.length; i++) {
+            this.types[i] = (Class<EntityComponent>) rawTypes[i];
+        }
+
+        boolean[] canUseStore = new boolean[rawTypes.length];
+        List<Class<?>> storeClasses = new ArrayList<>();
+        storeClasses.add(MembershipRecord.class);
+        for (int i = 0; i < rawTypes.length; i++) {
+            try {
+                LayoutBuilder.layout(rawTypes[i]);
+                canUseStore[i] = true;
+                storeClasses.add(rawTypes[i]);
+            } catch (Exception ignored) {
+                canUseStore[i] = false;
+            }
+        }
+
+        this.store = DataStore.packed(capacity, storeClasses.toArray(new Class<?>[0]));
+        this.presentAccessor = Accessors.boolFieldInStore(store, MembershipRecord.class, "present");
+
+        this.bridges        = new ComponentCursorBridge[rawTypes.length];
+        this.heapComponents = new EntityComponent[rawTypes.length][];
+        for (int i = 0; i < rawTypes.length; i++) {
+            if (canUseStore[i]) {
+                ComponentCursorBridge<?> bridge = ComponentCursorBridge.tryCreate(store, rawTypes[i]);
+                if (bridge != null) {
+                    bridges[i] = bridge;
+                } else {
+                    heapComponents[i] = new EntityComponent[capacity];
+                }
+            } else {
+                heapComponents[i] = new EntityComponent[capacity];
+            }
+        }
+
+        this.indexedIds = new IndexedEntityId[capacity];
+        this.entities   = new IndexedEntity[capacity];
+
+        loadInitialEntitiesFrom(bootstrapIds);
+    }
+
     // -----------------------------------------------------------------------
-    // Bootstrap
     // Bootstrap helpers
 
     @SuppressWarnings("unchecked")
@@ -183,6 +247,16 @@ public final class PackedEntitySet extends AbstractSet<Entity> implements Entity
             }
         } finally {
             bootstrap.release();
+        }
+    }
+
+    private void loadInitialEntitiesFrom(Collection<EntityId> entityIds) {
+        for (EntityId eid : entityIds) {
+            EntityComponent[] comps = loadComponentsFromParent(eid);
+            if (comps != null) {
+                int index = allocateIndex();
+                putEntity(index, eid, comps);
+            }
         }
     }
 
