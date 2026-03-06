@@ -18,11 +18,10 @@ import com.simsilica.es.base.MemStringIndex;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
@@ -31,11 +30,12 @@ import java.util.concurrent.atomic.AtomicLong;
  * {@code EntityData} (unlike {@link PackedEntityData}).
  *
  * <h3>Component storage</h3>
- * <p>Components are stored in a {@link ConcurrentHashMap} keyed by component type, with a
- * nested map from entity-id {@code long} to component instance.  This gives O(1) reads and
- * writes for individual component access, and allows the candidate set for
- * {@link #getEntities}/{@link #findEntities} queries to be computed without any external
- * data source.
+ * <p>Components are stored in a {@code HashMap<Class, EntityComponent[]>} where each array
+ * is indexed directly by the numeric entity ID (dense integers assigned by an
+ * {@link java.util.concurrent.atomic.AtomicLong} counter starting at 1).  This gives O(1)
+ * reads and writes with no boxing and no hash-collision overhead, and allows the candidate
+ * set for {@link #getEntities}/{@link #findEntities} queries to be computed without any
+ * external data source.
  *
  * <h3>Entity sets</h3>
  * <p>{@link #getEntities} returns a {@link PackedEntitySet} whose in-store packed
@@ -79,19 +79,22 @@ public final class BitKitEntityData implements EntityData, ObservableEntityData 
     private final int capacity;
 
     /**
-     * Per-type component storage: {@code componentType → (entityId.getId() → component)}.
-     * <p>A map entry for a given type exists only once the first component of that type
-     * has been stored.  Removal shrinks the per-entity inner map but never removes the
-     * outer map entry (harmless, consistent with standard ECS patterns).
+     * Per-type component storage: {@code componentType → EntityComponent[entityId]}.
+     *
+     * <p>Entity IDs are assigned by {@link #createEntity()} via an {@link AtomicLong}
+     * counter starting at 1, so {@code entityId} is always a dense integer in {@code [1, capacity]}.
+     * Direct array access by {@code (int) entityId} is O(1) with no boxing.
+     *
+     * <p>An array entry is {@code null} until the first component of that type is stored,
+     * and the entry at a given index is set to {@code null} on removal.
      */
-    private final ConcurrentHashMap<Class<?>, ConcurrentHashMap<Long, EntityComponent>>
-            componentMaps = new ConcurrentHashMap<>();
+    private final HashMap<Class<?>, EntityComponent[]> componentArrays = new HashMap<>();
 
     /** Registered global change listeners (e.g. {@link DefaultWatchedEntity} instances). */
-    private final List<EntityComponentListener> listeners = new CopyOnWriteArrayList<>();
+    private final List<EntityComponentListener> listeners = new ArrayList<>();
 
     /** All active (un-released) {@link PackedEntitySet} instances needing change notifications. */
-    private final List<PackedEntitySet> entitySets = new CopyOnWriteArrayList<>();
+    private final List<PackedEntitySet> entitySets = new ArrayList<>();
 
     private final StringIndex strings = new MemStringIndex();
 
@@ -135,9 +138,11 @@ public final class BitKitEntityData implements EntityData, ObservableEntityData 
 
     @Override
     public void removeEntity(EntityId id) {
-        long rawId = id.getId();
-        for (var entry : componentMaps.entrySet()) {
-            if (entry.getValue().remove(rawId) != null) {
+        int rawId = (int) id.getId();
+        for (var entry : componentArrays.entrySet()) {
+            EntityComponent[] arr = entry.getValue();
+            if (arr != null && rawId < arr.length && arr[rawId] != null) {
+                arr[rawId] = null;
                 @SuppressWarnings("unchecked")
                 Class<? extends EntityComponent> type =
                         (Class<? extends EntityComponent>) entry.getKey();
@@ -151,7 +156,7 @@ public final class BitKitEntityData implements EntityData, ObservableEntityData 
 
     @Override
     public <T extends EntityComponent> void setComponent(EntityId id, T component) {
-        getOrCreateMap(component.getClass()).put(id.getId(), component);
+        getOrCreateArray(component.getClass())[(int) id.getId()] = component;
         fireChange(new EntityChange(id, component));
     }
 
@@ -164,8 +169,10 @@ public final class BitKitEntityData implements EntityData, ObservableEntityData 
 
     @Override
     public <T extends EntityComponent> boolean removeComponent(EntityId id, Class<T> type) {
-        ConcurrentHashMap<Long, EntityComponent> map = componentMaps.get(type);
-        if (map == null || map.remove(id.getId()) == null) return false;
+        EntityComponent[] arr = componentArrays.get(type);
+        int rawId = (int) id.getId();
+        if (arr == null || rawId >= arr.length || arr[rawId] == null) return false;
+        arr[rawId] = null;
         fireChange(new EntityChange(id, type));
         return true;
     }
@@ -183,9 +190,11 @@ public final class BitKitEntityData implements EntityData, ObservableEntityData 
 
     @Override
     public <T extends EntityComponent> T getComponent(EntityId id, Class<T> type) {
-        ConcurrentHashMap<Long, EntityComponent> map = componentMaps.get(type);
-        if (map == null) return null;
-        return type.cast(map.get(id.getId()));
+        EntityComponent[] arr = componentArrays.get(type);
+        if (arr == null) return null;
+        int rawId = (int) id.getId();
+        if (rawId >= arr.length) return null;
+        return type.cast(arr[rawId]);
     }
 
     @Override
@@ -263,57 +272,69 @@ public final class BitKitEntityData implements EntityData, ObservableEntityData 
     public void close() {
         entitySets.clear();
         listeners.clear();
-        componentMaps.clear();
+        componentArrays.clear();
     }
 
     // -----------------------------------------------------------------------
     // Internal helpers
 
-    @SuppressWarnings("unchecked")
-    private ConcurrentHashMap<Long, EntityComponent> getOrCreateMap(Class<?> type) {
-        return componentMaps.computeIfAbsent(type, k -> new ConcurrentHashMap<>());
+    private EntityComponent[] getOrCreateArray(Class<?> type) {
+        EntityComponent[] arr = componentArrays.get(type);
+        if (arr == null) {
+            arr = new EntityComponent[capacity + 1];   // index 0 unused; IDs start at 1
+            componentArrays.put(type, arr);
+        }
+        return arr;
     }
 
     /**
      * Dispatches a component-change event to all registered listeners and
      * to all active {@link PackedEntitySet} instances.
+     *
+     * <p><strong>Note:</strong> this method is not re-entrant.  Listener or
+     * entity-set callbacks must not add or remove listeners / entity sets
+     * during this call.
      */
     private void fireChange(EntityChange change) {
-        for (EntityComponentListener listener : listeners) {
-            listener.componentChange(change);
+        for (int i = 0, n = listeners.size(); i < n; i++) {
+            listeners.get(i).componentChange(change);
         }
-        for (PackedEntitySet set : entitySets) {
-            if (!set.isReleased()) {
+        // Backwards iteration: safe to remove at index i while iterating.
+        for (int i = entitySets.size() - 1; i >= 0; i--) {
+            PackedEntitySet set = entitySets.get(i);
+            if (set.isReleased()) {
+                entitySets.remove(i);
+            } else {
                 set.entityChange(change);
             }
         }
-        entitySets.removeIf(PackedEntitySet::isReleased);
     }
 
     /**
      * Returns the entity IDs that have all of the given component types.
-     * Uses intersection of per-type key sets.
+     * Scans the array for the first type, then checks subsequent types.
      */
     @SuppressWarnings("rawtypes")
     private Collection<EntityId> findCandidates(Class... types) {
         if (types.length == 0) return Collections.emptyList();
 
-        Set<Long> ids = null;
-        for (Class<?> type : types) {
-            ConcurrentHashMap<Long, EntityComponent> map = componentMaps.get(type);
-            if (map == null || map.isEmpty()) return Collections.emptyList();
-            if (ids == null) {
-                ids = new HashSet<>(map.keySet());
-            } else {
-                ids.retainAll(map.keySet());
-                if (ids.isEmpty()) return Collections.emptyList();
+        EntityComponent[] firstArr = componentArrays.get(types[0]);
+        if (firstArr == null) return Collections.emptyList();
+
+        List<EntityId> result = new ArrayList<>();
+        for (int i = 1; i < firstArr.length; i++) {
+            if (firstArr[i] == null) continue;
+            // check remaining types
+            boolean hasAll = true;
+            for (int j = 1; j < types.length; j++) {
+                EntityComponent[] arr = componentArrays.get(types[j]);
+                if (arr == null || i >= arr.length || arr[i] == null) {
+                    hasAll = false;
+                    break;
+                }
             }
+            if (hasAll) result.add(new EntityId(i));
         }
-
-        if (ids == null) return Collections.emptyList();
-
-        List<EntityId> result = new ArrayList<>(ids.size());
-        for (Long id : ids) result.add(new EntityId(id));
         return result;
     }
 

@@ -26,7 +26,6 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.NoSuchElementException;
 import java.util.Set;
-import java.util.concurrent.ConcurrentLinkedQueue;
 
 /**
  * A self-managing {@link EntitySet} that stores entity membership and component data
@@ -83,6 +82,15 @@ public final class PackedEntitySet extends AbstractSet<Entity> implements Entity
      */
     private final EntityComponent[][] heapComponents;
 
+    /**
+     * Heap-side component cache — always kept in sync with the packed store and heap
+     * fallback arrays.  {@code fastCache[ti][slot]} holds the current component reference
+     * for type {@code ti} at entity slot {@code slot}, enabling O(1) object-return reads
+     * in {@link #getComponentForIndex} without going through the packed store's
+     * MethodHandle machinery (which would also allocate a new record instance per read).
+     */
+    private final EntityComponent[][] fastCache;
+
     /** Dense index → IndexedEntityId (null if slot is free). */
     private final IndexedEntityId[] indexedIds;
 
@@ -98,7 +106,7 @@ public final class PackedEntitySet extends AbstractSet<Entity> implements Entity
     private Set<Entity> changedEntities = new HashSet<>();
     private Set<Entity> removedEntities = new HashSet<>();
 
-    private final ConcurrentLinkedQueue<EntityChange> pendingChanges = new ConcurrentLinkedQueue<>();
+    private final ArrayDeque<EntityChange> pendingChanges = new ArrayDeque<>();
 
     private boolean filtersChanged = false;
     private boolean released = false;
@@ -140,6 +148,7 @@ public final class PackedEntitySet extends AbstractSet<Entity> implements Entity
         // ── Phase 3: build ComponentCursorBridges for storable types; allocate heap arrays for others ──
         this.bridges        = new ComponentCursorBridge[rawTypes.length];
         this.heapComponents = new EntityComponent[rawTypes.length][];
+        this.fastCache      = new EntityComponent[rawTypes.length][capacity];
         for (int i = 0; i < rawTypes.length; i++) {
             if (canUseStore[i]) {
                 ComponentCursorBridge<?> bridge = ComponentCursorBridge.tryCreate(store, rawTypes[i]);
@@ -205,6 +214,7 @@ public final class PackedEntitySet extends AbstractSet<Entity> implements Entity
 
         this.bridges        = new ComponentCursorBridge[rawTypes.length];
         this.heapComponents = new EntityComponent[rawTypes.length][];
+        this.fastCache      = new EntityComponent[rawTypes.length][capacity];
         for (int i = 0; i < rawTypes.length; i++) {
             if (canUseStore[i]) {
                 ComponentCursorBridge<?> bridge = ComponentCursorBridge.tryCreate(store, rawTypes[i]);
@@ -280,6 +290,7 @@ public final class PackedEntitySet extends AbstractSet<Entity> implements Entity
 
         presentAccessor.set(store, index, true);
         for (int ti = 0; ti < types.length; ti++) {
+            fastCache[ti][index] = comps[ti];          // update heap cache first
             if (bridges[ti] != null) {
                 @SuppressWarnings("unchecked")
                 ComponentCursorBridge<EntityComponent> bridge = bridges[ti];
@@ -297,6 +308,7 @@ public final class PackedEntitySet extends AbstractSet<Entity> implements Entity
     private void removeEntity(int index) {
         presentAccessor.set(store, index, false);
         for (int ti = 0; ti < types.length; ti++) {
+            fastCache[ti][index] = null;               // clear heap cache
             if (heapComponents[ti] != null) {
                 heapComponents[ti][index] = null;
             }
@@ -334,8 +346,8 @@ public final class PackedEntitySet extends AbstractSet<Entity> implements Entity
     // Package-private accessors for IndexedEntity
 
     /**
-     * Writes component {@code c} directly into the store at {@code index}.
-     * Called from {@link IndexedEntity#set} to keep the local store current
+     * Writes component {@code c} directly into the store and heap cache at {@code index}.
+     * Called from {@link IndexedEntity#set} to keep the local store and cache current
      * (matching DefaultEntityData's live-read contract for {@code entity.get()}).
      * Also used internally when loading component values during {@link #applyChanges}.
      */
@@ -343,6 +355,7 @@ public final class PackedEntitySet extends AbstractSet<Entity> implements Entity
     void writeComponentDirect(int index, EntityComponent c) {
         int ti = typeIndex(c.getClass());
         if (ti < 0) return;
+        fastCache[ti][index] = c;                      // always update heap cache
         if (bridges[ti] != null) {
             ((ComponentCursorBridge<EntityComponent>) bridges[ti]).write(store, index, c);
         } else {
@@ -350,13 +363,17 @@ public final class PackedEntitySet extends AbstractSet<Entity> implements Entity
         }
     }
 
+    /**
+     * Returns the current component of the given type for the entity at {@code index}.
+     *
+     * <p>Reads directly from the {@linkplain #fastCache heap cache} — O(1) array access,
+     * no MethodHandle invocation, no record allocation.  The cache is always kept in sync
+     * with the packed store by {@link #writeComponentDirect} and {@link #putEntity}.
+     */
     EntityComponent getComponentForIndex(int index, Class<?> type) {
-        int ti = typeIndex((Class<EntityComponent>) type);
+        int ti = typeIndex(type);
         if (ti < 0) return null;
-        if (bridges[ti] != null) {
-            return ((ComponentCursorBridge<EntityComponent>) bridges[ti]).read(store, index);
-        }
-        return heapComponents[ti][index];
+        return fastCache[ti][index];
     }
 
     boolean isEntityComplete(int index) {
@@ -369,11 +386,7 @@ public final class PackedEntitySet extends AbstractSet<Entity> implements Entity
     EntityComponent[] getComponentsForIndex(int index) {
         EntityComponent[] result = new EntityComponent[types.length];
         for (int ti = 0; ti < types.length; ti++) {
-            if (bridges[ti] != null) {
-                result[ti] = ((ComponentCursorBridge<EntityComponent>) bridges[ti]).read(store, index);
-            } else {
-                result[ti] = heapComponents[ti][index];
-            }
+            result[ti] = fastCache[ti][index];         // read from heap cache
         }
         return result;
     }
@@ -473,14 +486,22 @@ public final class PackedEntitySet extends AbstractSet<Entity> implements Entity
                 return;
             }
 
-            // Persist the new value — store-backed or heap-backed
+            // Persist the new value — store-backed or heap-backed.
+            // Opt: if writeComponentDirect already wrote this exact component object
+            // (same reference in fastCache), the packed store and heap fallback are
+            // already current — skip the redundant bridge.write / heapComponents update.
             if (changedTi >= 0) {
-                if (bridges[changedTi] != null) {
-                    ((ComponentCursorBridge<EntityComponent>) bridges[changedTi])
-                            .write(store, idx, newComp);
-                } else if (heapComponents[changedTi] != null) {
-                    heapComponents[changedTi][idx] = newComp;
+                if (fastCache[changedTi][idx] != newComp) {
+                    // External change: sync fastCache, store and heap-fallback.
+                    fastCache[changedTi][idx] = newComp;
+                    if (bridges[changedTi] != null) {
+                        ((ComponentCursorBridge<EntityComponent>) bridges[changedTi])
+                                .write(store, idx, newComp);
+                    } else if (heapComponents[changedTi] != null) {
+                        heapComponents[changedTi][idx] = newComp;
+                    }
                 }
+                // else: writeComponentDirect already synced everything — no-op
             }
             changedEntities.add(entities[idx]);
         } else {
@@ -665,7 +686,7 @@ public final class PackedEntitySet extends AbstractSet<Entity> implements Entity
     public <T extends EntityComponent> PackedCursor<T> createCursor(Class<T> type) {
         int ti = typeIndex(type);
         if (ti < 0 || bridges[ti] == null) return null;
-        return new PackedCursor<>((ComponentCursorBridge<T>) bridges[ti], store);
+        return new PackedCursor<>((ComponentCursorBridge<T>) bridges[ti], store, fastCache[ti]);
     }
 
     /**
@@ -684,31 +705,44 @@ public final class PackedEntitySet extends AbstractSet<Entity> implements Entity
     public static final class PackedCursor<T extends EntityComponent> {
         private final ComponentCursorBridge<T> bridge;
         private final DataStore<?>             store;
+        /** Heap cache slice for this type — enables O(1) reads without store MethodHandle. */
+        private final EntityComponent[]        fastCache;
 
-        PackedCursor(ComponentCursorBridge<T> bridge, DataStore<?> store) {
-            this.bridge = bridge;
-            this.store  = store;
+        PackedCursor(ComponentCursorBridge<T> bridge, DataStore<?> store,
+                     EntityComponent[] fastCache) {
+            this.bridge    = bridge;
+            this.store     = store;
+            this.fastCache = fastCache;
         }
 
         /**
-         * Reads the component at the given row index from the packed store and returns a
-         * new component instance.  Uses the unboxed {@link java.lang.invoke.MethodHandle}
-         * path — no {@code Object[]} allocation, no primitive boxing.
+         * Reads the component at the given row index.
+         *
+         * <p>Returns the cached component reference directly from the heap cache —
+         * O(1) array access, no MethodHandle, no record allocation.  The cache is kept
+         * in sync with the packed store by {@link PackedEntitySet#writeComponentDirect}
+         * and {@link PackedEntitySet#putEntity}.
          *
          * <p>{@code index} must be a valid slot (i.e. an {@link IndexedEntity#getIndex()}
          * value for an entity currently in the set); behaviour is undefined for free slots.
          */
-        public T read(int index) { return bridge.read(store, index); }
+        @SuppressWarnings("unchecked")
+        public T read(int index) {
+            return (T) fastCache[index];
+        }
 
         /**
-         * Writes the component at the given row index to the packed store.
+         * Writes the component at the given row index to the packed store and heap cache.
          * <em>This does not propagate the change to the parent {@link com.simsilica.es.EntityData}</em>;
          * call {@link IndexedEntity#set} if authoritative storage and change notification
          * are required.
          *
          * <p>{@code component} must not be {@code null}; {@code index} must be a valid slot.
          */
-        public void write(int index, T component) { bridge.write(store, index, component); }
+        public void write(int index, T component) {
+            bridge.write(store, index, component);
+            fastCache[index] = component;
+        }
     }
 
     // -----------------------------------------------------------------------
