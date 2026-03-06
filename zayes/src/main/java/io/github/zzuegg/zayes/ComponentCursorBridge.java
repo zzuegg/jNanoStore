@@ -311,21 +311,32 @@ final class ComponentCursorBridge<T> {
     // VarHandle-based FieldBridge (write path only)
 
     private static final class VarHandleFieldBridge implements FieldBridge {
-        private final VarHandle    cursorVh;
-        private final MethodHandle compReader;
-        private final Class<?>     type;
+        /**
+         * Pre-built (Object cursorInst, Object component) -> void handle.
+         *
+         * <p>Built via {@code MethodHandles.filterArguments(setter, 1, getter).asType(...)},
+         * which threads the primitive field value directly from the component getter to
+         * the cursor setter — no boxing of primitives (float, int, double, …).
+         * CHECKCAST adapters are inserted by {@code asType} for the object arguments.
+         */
+        private final MethodHandle copier;
 
-        VarHandleFieldBridge(VarHandle cursorVh, MethodHandle compReader, Class<?> type) {
-            this.cursorVh   = cursorVh;
-            this.compReader = compReader;
-            this.type       = type;
+        VarHandleFieldBridge(VarHandle cursorVh, MethodHandle compReader, Class<?> fieldType)
+                throws Exception {
+            // setter: (CursorClass, fieldType) -> void
+            MethodHandle setterMH = cursorVh.toMethodHandle(VarHandle.AccessMode.SET);
+            // chain: setter(cursorInst, getter(component)) — primitive flows without boxing
+            MethodHandle chained = MethodHandles.filterArguments(setterMH, 1, compReader);
+            // erase to (Object, Object) -> void; CHECKCAST adapters added by asType, no boxing
+            this.copier = chained.asType(
+                    MethodType.methodType(void.class, Object.class, Object.class));
         }
 
         @Override
         public void copyFromComponent(Object component, Object cursorInst) {
             try {
-                Object val = compReader.invoke(component);
-                cursorVh.set(cursorInst, val);
+                // copier argument order: (cursorInst, component) matches how it was built
+                copier.invokeExact(cursorInst, component);
             } catch (Throwable e) {
                 throw new RuntimeException("Field copy failed", e);
             }

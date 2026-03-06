@@ -66,7 +66,7 @@ public class EntityDataBenchmark {
     private EntityId[]         defaultIds;
 
     // -----------------------------------------------------------------------
-    // Packed (BitKit-backed) state — separate underlying EntityData instance
+    // Packed (BitKit-backed, wrapping DefaultEntityData) state
 
     private DefaultEntityData  packedUnderlyingEd;
     private PackedEntityData   packedEd;
@@ -79,7 +79,7 @@ public class EntityDataBenchmark {
     private PackedEntitySet.PackedCursor<Speed>       spdCursor;
 
     // Multi-component projection: all fields in one cursor, one load() per entity
-    static class PhysicsProjection {
+    public static class PhysicsProjection {
         @StoreField(component = Position.class, field = "x")       public float posX;
         @StoreField(component = Position.class, field = "y")       public float posY;
         @StoreField(component = Position.class, field = "z")       public float posZ;
@@ -94,6 +94,22 @@ public class EntityDataBenchmark {
     // Auto-generated projection: all store-backed fields, one load() per entity
     private DataCursor<?> autoCursor;
     private Object autoCursorInstance;
+
+    // -----------------------------------------------------------------------
+    // BitKitEntityData (ground-up native implementation) state
+
+    private BitKitEntityData   bitkitEd;
+    private EntitySet          bitkitSet;
+    private EntityId[]         bitkitIds;
+
+    // Direct-access cursors for the BitKitEntityData cursor benchmark
+    private PackedEntitySet.PackedCursor<Position>    bitkitPosCursor;
+    private PackedEntitySet.PackedCursor<Orientation> bitkitOriCursor;
+    private PackedEntitySet.PackedCursor<Speed>       bitkitSpdCursor;
+
+    // Multi-component cursor for BitKitEntityData
+    private DataCursor<PhysicsProjection> bitkitMultiCursor;
+    private DataStore<?> bitkitStore;
 
     // -----------------------------------------------------------------------
     // Setup / teardown
@@ -113,7 +129,7 @@ public class EntityDataBenchmark {
         defaultSet = defaultEd.getEntities(Position.class, Orientation.class, Speed.class);
         defaultSet.applyChanges();
 
-        // --- Packed (independent data, same initial values) ---
+        // --- Packed (wrapping DefaultEntityData, independent data) ---
         packedUnderlyingEd = new DefaultEntityData();
         packedIds = new EntityId[entityCount];
         for (int i = 0; i < entityCount; i++) {
@@ -142,14 +158,36 @@ public class EntityDataBenchmark {
         if (autoCursor != null) {
             autoCursorInstance = autoCursor.get();
         }
+
+        // --- BitKitEntityData (ground-up native, independent data) ---
+        bitkitEd  = new BitKitEntityData();
+        bitkitIds = new EntityId[entityCount];
+        for (int i = 0; i < entityCount; i++) {
+            bitkitIds[i] = bitkitEd.createEntity();
+            bitkitEd.setComponents(bitkitIds[i],
+                    new Position(i, i * 0.5f, i * 0.25f),
+                    new Orientation(i * 0.1f, i * 0.2f, i * 0.3f),
+                    new Speed(1.0f + i * 0.001f));
+        }
+        bitkitSet = bitkitEd.getEntities(Position.class, Orientation.class, Speed.class);
+        bitkitSet.applyChanges();
+
+        PackedEntitySet bitkitPes = (PackedEntitySet) bitkitSet;
+        bitkitPosCursor = bitkitPes.createCursor(Position.class);
+        bitkitOriCursor = bitkitPes.createCursor(Orientation.class);
+        bitkitSpdCursor = bitkitPes.createCursor(Speed.class);
+        bitkitMultiCursor = bitkitPes.createDataCursor(PhysicsProjection.class);
+        bitkitStore = bitkitPes.store();
     }
 
     @TearDown(Level.Trial)
     public void tearDown() {
         defaultSet.release();
         packedSet.release();
+        bitkitSet.release();
         defaultEd.close();
         packedEd.close();
+        bitkitEd.close();
     }
 
     // -----------------------------------------------------------------------
@@ -239,6 +277,70 @@ public class EntityDataBenchmark {
         for (var entity : packedSet) {
             int idx = ((IndexedEntity) entity).getIndex();
             PhysicsProjection p = multiCursor.update(packedStore, idx);
+            Position newPos = new Position(
+                    p.posX + p.yaw   * p.speed,
+                    p.posY + p.pitch * p.speed,
+                    p.posZ + p.roll  * p.speed);
+            entity.set(newPos);
+            bh.consume(newPos);
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // BitKitEntityData benchmarks
+
+    /**
+     * BitKitEntityData — standard entity.get() API (same pattern as defaultEntityData).
+     * BitKitEntityData manages entity IDs and component storage natively without wrapping
+     * DefaultEntityData.
+     */
+    @Benchmark
+    public void bitkitEntityData_gameLoop(Blackhole bh) {
+        bitkitSet.applyChanges();
+        for (var entity : bitkitSet) {
+            Position    pos = entity.get(Position.class);
+            Orientation ori = entity.get(Orientation.class);
+            Speed       spd = entity.get(Speed.class);
+            Position newPos = new Position(
+                    pos.x() + ori.yaw()   * spd.value(),
+                    pos.y() + ori.pitch() * spd.value(),
+                    pos.z() + ori.roll()  * spd.value());
+            entity.set(newPos);
+            bh.consume(newPos);
+        }
+    }
+
+    /**
+     * BitKitEntityData — allocation-free direct-cursor reads, bypassing the
+     * {@link IndexedEntity#get} abstraction.
+     */
+    @Benchmark
+    public void bitkitEntityData_gameLoop_cursor(Blackhole bh) {
+        bitkitSet.applyChanges();
+        for (var entity : bitkitSet) {
+            int idx = ((IndexedEntity) entity).getIndex();
+            Position    pos = bitkitPosCursor.read(idx);
+            Orientation ori = bitkitOriCursor.read(idx);
+            Speed       spd = bitkitSpdCursor.read(idx);
+            Position newPos = new Position(
+                    pos.x() + ori.yaw()   * spd.value(),
+                    pos.y() + ori.pitch() * spd.value(),
+                    pos.z() + ori.roll()  * spd.value());
+            entity.set(newPos);
+            bh.consume(newPos);
+        }
+    }
+
+    /**
+     * BitKitEntityData — single multi-component cursor load per entity (all three
+     * component types in one call).
+     */
+    @Benchmark
+    public void bitkitEntityData_gameLoop_multiCursor(Blackhole bh) {
+        bitkitSet.applyChanges();
+        for (var entity : bitkitSet) {
+            int idx = ((IndexedEntity) entity).getIndex();
+            PhysicsProjection p = bitkitMultiCursor.update(bitkitStore, idx);
             Position newPos = new Position(
                     p.posX + p.yaw   * p.speed,
                     p.posY + p.pitch * p.speed,
