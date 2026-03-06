@@ -79,7 +79,7 @@ public class EntityDataBenchmark {
     private PackedEntitySet.PackedCursor<Speed>       spdCursor;
 
     // Multi-component projection: all fields in one cursor, one load() per entity
-    static class PhysicsProjection {
+    public static class PhysicsProjection {
         @StoreField(component = Position.class, field = "x")       public float posX;
         @StoreField(component = Position.class, field = "y")       public float posY;
         @StoreField(component = Position.class, field = "z")       public float posZ;
@@ -94,6 +94,22 @@ public class EntityDataBenchmark {
     // Auto-generated projection: all store-backed fields, one load() per entity
     private DataCursor<?> autoCursor;
     private Object autoCursorInstance;
+
+    // -----------------------------------------------------------------------
+    // Bit (standalone BitKit-native) state — no wrapping, no parent EntityData
+
+    private BitEntityData bitEd;
+    private EntitySet      bitSet;
+    private EntityId[]     bitIds;
+
+    // Direct-access cursors for BitEntityData benchmarks
+    private PackedEntitySet.PackedCursor<Position>    bitPosCursor;
+    private PackedEntitySet.PackedCursor<Orientation> bitOriCursor;
+    private PackedEntitySet.PackedCursor<Speed>       bitSpdCursor;
+
+    // Multi-component projection for BitEntityData
+    private DataCursor<PhysicsProjection> bitMultiCursor;
+    private DataStore<?> bitStore;
 
     // -----------------------------------------------------------------------
     // Setup / teardown
@@ -142,14 +158,39 @@ public class EntityDataBenchmark {
         if (autoCursor != null) {
             autoCursorInstance = autoCursor.get();
         }
+
+        // --- Bit (standalone, no wrapping) ---
+        bitEd  = new BitEntityData();
+        bitIds = new EntityId[entityCount];
+        for (int i = 0; i < entityCount; i++) {
+            bitIds[i] = bitEd.createEntity();
+            bitEd.setComponents(bitIds[i],
+                    new Position(i, i * 0.5f, i * 0.25f),
+                    new Orientation(i * 0.1f, i * 0.2f, i * 0.3f),
+                    new Speed(1.0f + i * 0.001f));
+        }
+        bitSet = bitEd.getEntities(Position.class, Orientation.class, Speed.class);
+        bitSet.applyChanges();
+
+        // Build direct-access cursors for the BitEntityData cursor benchmark
+        BitEntitySet bes = (BitEntitySet) bitSet;
+        bitPosCursor = bes.createCursor(Position.class);
+        bitOriCursor = bes.createCursor(Orientation.class);
+        bitSpdCursor = bes.createCursor(Speed.class);
+
+        // Build multi-component cursor (explicit projection class)
+        bitMultiCursor = bes.createDataCursor(PhysicsProjection.class);
+        bitStore = bes.store();
     }
 
     @TearDown(Level.Trial)
     public void tearDown() {
         defaultSet.release();
         packedSet.release();
+        bitSet.release();
         defaultEd.close();
         packedEd.close();
+        bitEd.close();
     }
 
     // -----------------------------------------------------------------------
@@ -239,6 +280,70 @@ public class EntityDataBenchmark {
         for (var entity : packedSet) {
             int idx = ((IndexedEntity) entity).getIndex();
             PhysicsProjection p = multiCursor.update(packedStore, idx);
+            Position newPos = new Position(
+                    p.posX + p.yaw   * p.speed,
+                    p.posY + p.pitch * p.speed,
+                    p.posZ + p.roll  * p.speed);
+            entity.set(newPos);
+            bh.consume(newPos);
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // BitEntityData benchmarks (standalone, no wrapping)
+
+    /**
+     * Standalone {@link BitEntityData} — entity.get() path.
+     * Same game-loop pattern as the other benchmarks but using the standalone
+     * BitKit-native EntityData that does not wrap DefaultEntityData.
+     */
+    @Benchmark
+    public void bitEntityData_gameLoop(Blackhole bh) {
+        bitSet.applyChanges();
+        for (var entity : bitSet) {
+            Position    pos = entity.get(Position.class);
+            Orientation ori = entity.get(Orientation.class);
+            Speed       spd = entity.get(Speed.class);
+            Position newPos = new Position(
+                    pos.x() + ori.yaw()   * spd.value(),
+                    pos.y() + ori.pitch() * spd.value(),
+                    pos.z() + ori.roll()  * spd.value());
+            entity.set(newPos);
+            bh.consume(newPos);
+        }
+    }
+
+    /**
+     * Standalone {@link BitEntityData} with direct cursor access.
+     * Uses {@link BitEntity#getIndex()} for dense row access.
+     */
+    @Benchmark
+    public void bitEntityData_gameLoop_cursor(Blackhole bh) {
+        bitSet.applyChanges();
+        for (var entity : bitSet) {
+            int idx = ((BitEntity) entity).getIndex();
+            Position    pos = bitPosCursor.read(idx);
+            Orientation ori = bitOriCursor.read(idx);
+            Speed       spd = bitSpdCursor.read(idx);
+            Position newPos = new Position(
+                    pos.x() + ori.yaw()   * spd.value(),
+                    pos.y() + ori.pitch() * spd.value(),
+                    pos.z() + ori.roll()  * spd.value());
+            entity.set(newPos);
+            bh.consume(newPos);
+        }
+    }
+
+    /**
+     * Standalone {@link BitEntityData} with multi-component projection cursor.
+     * A single {@link DataCursor#load} populates all fields in one call.
+     */
+    @Benchmark
+    public void bitEntityData_gameLoop_multiCursor(Blackhole bh) {
+        bitSet.applyChanges();
+        for (var entity : bitSet) {
+            int idx = ((BitEntity) entity).getIndex();
+            PhysicsProjection p = bitMultiCursor.update(bitStore, idx);
             Position newPos = new Position(
                     p.posX + p.yaw   * p.speed,
                     p.posY + p.pitch * p.speed,
