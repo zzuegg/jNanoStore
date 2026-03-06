@@ -79,7 +79,7 @@ public class EntityDataBenchmark {
     private PackedEntitySet.PackedCursor<Speed>       spdCursor;
 
     // Multi-component projection: all fields in one cursor, one load() per entity
-    static class PhysicsProjection {
+    public static class PhysicsProjection {
         @StoreField(component = Position.class, field = "x")       public float posX;
         @StoreField(component = Position.class, field = "y")       public float posY;
         @StoreField(component = Position.class, field = "z")       public float posZ;
